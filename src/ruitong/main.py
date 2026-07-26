@@ -72,12 +72,22 @@ async def models() -> dict[str, list[str]]:
 # ── Middleware ────────────────────────────────────────────────────────
 
 
+def _config_for(request: Request) -> BridgeConfig:
+    """Return the app's config, falling back to the environment.
+
+    Deliberately not `getattr(state, "config", BridgeConfig.from_env())`:
+    Python evaluates a call's arguments eagerly, so that form re-reads
+    `os.environ` and rebuilds the config on *every* request even when one is
+    already cached — three times per request across the middleware stack.
+    """
+    config: BridgeConfig | None = getattr(request.app.state, "config", None)
+    return config if config is not None else BridgeConfig.from_env()
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     """Check API key on every request unless path is exempt."""
-    config: BridgeConfig = getattr(
-        request.app.state, "config", BridgeConfig.from_env()
-    )
+    config = _config_for(request)
 
     if config.api_key and request.url.path not in AUTH_EXEMPT_PATHS:
         provided = request.headers.get("X-API-Key", "")
@@ -95,9 +105,7 @@ async def auth_middleware(request: Request, call_next):
 @app.middleware("http")
 async def payload_size_middleware(request: Request, call_next):
     """Reject requests with oversized payloads (Content-Length header)."""
-    config: BridgeConfig = getattr(
-        request.app.state, "config", BridgeConfig.from_env()
-    )
+    config = _config_for(request)
 
     if request.method in ("POST", "PUT", "PATCH"):
         content_length = request.headers.get("content-length")
@@ -126,9 +134,7 @@ async def rate_limit_middleware(request: Request, call_next):
     if request.url.path in AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
-    config: BridgeConfig = getattr(
-        request.app.state, "config", BridgeConfig.from_env()
-    )
+    config = _config_for(request)
     if config.rate_limit_per_minute > 0:
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()

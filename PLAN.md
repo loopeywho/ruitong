@@ -1,8 +1,9 @@
 # 瑞通 (Ruitong) — CANN/CUDA Bridge · Implementation Plan
 
-> **Implementer:** Qwen. Work task-by-task, in order. Do not skip ahead.
+> **Implementer:** Qwen / Kimi. Work task-by-task, in order. Do not skip ahead.
 > **QA:** Claude reviews each completed phase. Update `CLAUDE.md` when a phase is done — that is the handoff signal. Findings land in `QA_FINDINGS.md`.
-> **Reference:** `RESEARCH.md` (read once, not every round).
+> **Read every round:** `LESSONS.md` (recurring bug classes + your own mistake log — **append to it**), `DECISIONS.md` (what was decided and why).
+> **Reference:** `RESEARCH.md`, `SECURITY_AUDIT.md` (read once, not every round).
 
 **Product:** Automated model porting between NVIDIA CUDA and Huawei Ascend (CANN), with proof of numerical equivalence. The unified inference API is the delivery surface, not the product.
 
