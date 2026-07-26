@@ -1,6 +1,7 @@
 """FastAPI application for Ruitong Bridge."""
 from __future__ import annotations
 
+import hmac
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -80,7 +81,9 @@ async def auth_middleware(request: Request, call_next):
 
     if config.api_key and request.url.path not in AUTH_EXEMPT_PATHS:
         provided = request.headers.get("X-API-Key", "")
-        if provided != config.api_key:
+        # Constant-time compare: `!=` leaks key length and prefix via response
+        # timing, letting an attacker recover the key byte by byte.
+        if not hmac.compare_digest(provided, config.api_key):
             return JSONResponse(
                 status_code=401,
                 content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
