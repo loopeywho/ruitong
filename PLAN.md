@@ -22,6 +22,18 @@
 4. **Ask before adding a dependency** beyond the stack above.
 5. **Minimum code that satisfies the acceptance criteria.** No speculative abstraction.
 6. A phase is done when its acceptance criteria pass, not when the code looks finished.
+7. **The CLI is the product; the API is not.** See `DECISIONS.md` D3–D5. `ruitong port` must run
+   standalone — no HTTP server, no job store, no auth required. If it ever depends on the API being
+   up, that is a regression. **Do not add new API surface** without a decision recorded in
+   `DECISIONS.md`.
+8. **Read the file before you cite it.** Every line number, symbol, or file claim in an audit or
+   status note must be quoted or grepped at the time of writing. Three fabricated citations have
+   already survived review this way — one of them (`POST /v1/port`) was hallucinated into a plan
+   description and then actually built.
+9. **Audit a pinned revision.** The repo is under git as of `4cd7835`. Commit before requesting an
+   audit, and cite the SHA in the audit. Never audit a tree that is being written to.
+10. **Verdicts come from execution, not reading.** An audit must run `uv run --extra dev pytest -q`
+    and `uv run mypy src/ruitong` and quote the real output.
 
 ---
 

@@ -252,3 +252,61 @@ Test count (172) and coverage (97%) are not evidence of correctness here — sev
 ---
 
 **Carryover (unchanged):** `git init`; `main.py` still registers `FakeCuda`/`FakeAscend` (see QA_PHASE2.md F1); `main.py` still at 0% coverage.
+---
+
+# ──── APPENDED: Claude (Sonnet 5, interactive) — 2026-07-27 00:30 ────
+
+**Pinned revision:** `4cd7835` (repo placed under git this session — see `DECISIONS.md` D6)
+**Executed:** `194 passed` · `mypy: Success, 19 source files` · total coverage **85%**
+
+## Retractions and confirmations from the previous round
+
+- **F3 (empty inner lists) — FIXED.** `max_absolute_difference([[]], [[]])` no longer crashes.
+- **F1/F2 (`top_k_set_agreement` value-vs-index) — verify against current source.** Suite is green
+  and coverage on `metrics.py` is 98%, so this may be resolved; the next audit must re-run the
+  near-miss case explicitly rather than infer from a passing suite. The near-miss test is the
+  evidence, not the pass count.
+- **`main.py` — RESOLVED.** 0% → **78%**. The replica-app problem from `QA_PHASE2.md` F2 is fixed.
+
+## F5 · CLI coverage is unmeasurable — the product's primary surface has no coverage signal
+
+`cli.py` reports **0% (82 statements)**. This is **not** "untested" — I nearly filed it as such and
+was wrong. `tests/test_cli.py` (138 lines) exercises it thoroughly via `subprocess`, which is the
+right way to test a real entry point.
+
+The problem is that `coverage.py` cannot instrument a subprocess, so:
+
+- The `≥90% coverage` gate **cannot be applied** to the one surface `DECISIONS.md` D3–D5 designate
+  as the product.
+- Nobody can tell which CLI error paths are exercised. Exit codes, malformed `--output` paths,
+  unreachable backends, and gate-failure branches may or may not be covered — the number is silent.
+- Wall-clock cost: each case spawns an interpreter with a 30s timeout.
+
+**Fix — keep both layers:**
+
+1. Refactor `cli.py` so `main(argv: list[str] | None = None) -> int` is callable in-process and
+   returns an exit code rather than calling `sys.exit()` internally.
+2. Test that function directly for argument parsing, error paths, and exit codes — this is
+   measurable and fast.
+3. Keep **two** subprocess tests only: `ruitong --help`, and one real end-to-end port producing a
+   report. Those prove the packaging and entry point genuinely work.
+
+This raises measured CLI coverage from 0% to something meaningful without losing end-to-end proof.
+
+## F6 · Coverage priority is inverted against the product decision
+
+| Surface | Coverage | Status per `DECISIONS.md` |
+|---|---|---|
+| `api/__init__.py` | 100% | D4 — built against the decision, not deployed |
+| `api/router.py` | 94% | D4 — same |
+| `jobs/persistence.py` | 88% | D4 — same |
+| **`cli.py`** | **0% (unmeasurable)** | **D3/D5 — this is the product** |
+
+The deprioritised surface is the best-covered; the product surface has no signal at all. Not a bug,
+but it is the wrong allocation of effort and should invert.
+
+## Next for the implementer
+
+1. F5 — make CLI coverage measurable (highest value: it is the shipping artifact).
+2. Re-verify F1 with an explicit near-miss assertion; do not infer from a green suite.
+3. Commit before the next audit and cite the SHA (`PLAN.md` rules 9–10).
