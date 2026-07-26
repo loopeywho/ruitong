@@ -66,3 +66,27 @@ replace them.
 No version control existed through Phases 0–4 despite ~190 tests. Every prior audit reviewed whole
 files with no way to pin a revision, which is how a fabricated citation and a false "7 failing
 tests" report both survived. **Every audit from here cites a SHA.**
+
+## D7 · 2026-07-27 — The equivalence gate is mis-calibrated; measured replacement adopted
+
+Calibrated against injected faults on CPU (`CALIBRATION.md`, `equivalence/faults.py`). Three defects,
+all measured:
+
+1. **`max_abs_diff ≤ 0.05` rejects correct ports.** BF16 rounding alone measures **0.4929** — 10×
+   the threshold. Every correct port would fail.
+2. **Root cause: the metric measures the wrong region.** Largest BF16 differences fall at logprobs
+   of −130 to −180 (probability ~1e-57, never sampled). Across the top-10 tokens the difference is
+   **0.0152**. Separation between correct (0.4929) and a real fault (0.5038) is **2.2%** — no
+   threshold can work.
+3. **`cosine_similarity` cannot detect scaling errors.** It is scale-invariant by definition:
+   ×1.01 through ×2.0 all score exactly 1.0000000000. It moved for one of five injected faults.
+
+**Adopted gate** — top-k (k=10) max_abs_diff ≤ 0.05 · probability mass |Σp−1| ≤ 0.01 · top-1 ≥ 0.99
+· top-5 set ≥ 0.95. **Drop cosine similarity and full-vocab max_abs_diff.** Separation improves from
+1.02× to **15×**.
+
+Thresholds are measured, not assumed. Re-measure against a real model (Qwen2.5-0.5B, FP32 vs BF16,
+CPU) before shipping — `PHASE_4_5_PROPOSAL.md` §4.5a.
+
+**Why it matters:** per D5 the report *is* the product. A gate that fails correct ports destroys
+trust on contact; one blind to a fault class ships a silent false PASS the customer acts on.
