@@ -33,6 +33,12 @@ class ChatRequest(BaseModel, frozen=True):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     seed: int | None = None
     stream: bool = False
+    # An OpenAI-compatible server returns logprobs ONLY when asked. Without
+    # these fields the request never asks, vLLM returns text alone, and every
+    # equivalence comparison silently degrades to weak text matching — the
+    # fixtures hid this because fakes return logprobs unconditionally.
+    logprobs: bool = False
+    top_logprobs: int | None = Field(default=None, ge=0, le=20)
 
 
 class Choice(BaseModel, frozen=True):

@@ -21,6 +21,13 @@ from .metrics import (
 
 # ── Thresholds ──────────────────────────────────────────────────────
 
+# Comparison must generate enough tokens for the metrics to mean anything:
+# at max_tokens=1 the logprob vector has length 1, and cosine / top-1 / top-5
+# are then constant 1.0 by construction.
+DEFAULT_COMPARISON_TOKENS = 128
+DEFAULT_TOP_LOGPROBS = 20
+
+
 class Thresholds:
     """Pass/fail thresholds for equivalence."""
 
@@ -141,14 +148,24 @@ class EquivalenceRunner:
                     ChatRequest(
                         model=model,
                         messages=[Message(role="user", content=prompt)],
-                        max_tokens=1,
+                        # max_tokens=1 makes logprob vectors length-1, which
+                        # forces cosine, top-1 and top-5 to a constant 1.0 —
+                        # three of four gate metrics become decoration.
+                        max_tokens=DEFAULT_COMPARISON_TOKENS,
+                        logprobs=True,
+                        top_logprobs=DEFAULT_TOP_LOGPROBS,
                     )
                 )
                 resp_b = await self.backend_b.chat(
                     ChatRequest(
                         model=model,
                         messages=[Message(role="user", content=prompt)],
-                        max_tokens=1,
+                        # max_tokens=1 makes logprob vectors length-1, which
+                        # forces cosine, top-1 and top-5 to a constant 1.0 —
+                        # three of four gate metrics become decoration.
+                        max_tokens=DEFAULT_COMPARISON_TOKENS,
+                        logprobs=True,
+                        top_logprobs=DEFAULT_TOP_LOGPROBS,
                     )
                 )
             except Exception as exc:
