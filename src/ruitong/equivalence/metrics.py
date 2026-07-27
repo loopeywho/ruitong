@@ -185,3 +185,57 @@ def probability_mass(tensor: list[float] | list[list[float]]) -> float:
             total += math.exp(value) if value < 64.0 else math.exp(64.0)
         totals.append(total)
     return sum(totals) / len(totals)
+
+
+# ── Token-identity agreement (the metric PLAN.md actually specified) ──
+#
+# `top_k_agreement` / `top_k_set_agreement` above rank *positions* and compare
+# indices. They never see a token. Measured consequences:
+#
+#   same token every position, confidences reordered  -> reports 0.0 (total
+#       disagreement) on output that is in fact identical
+#   completely different tokens, same confidences     -> reports 1.0 (perfect
+#       agreement) on output that shares nothing
+#
+# PLAN.md specifies "top-1 agreement" and "top-5 set agreement" in their
+# standard meaning: does the argmax *token* match, and do the top-5 *token*
+# sets overlap. That is what these two compute. They require token identity,
+# which `ChoiceLogprobs.top_k_tokens()` now carries off the wire.
+
+
+def top1_token_agreement(
+    tokens_a: list[list[str]], tokens_b: list[list[str]]
+) -> float:
+    """Fraction of positions where both backends' most likely TOKEN matches."""
+    if not tokens_a or not tokens_b:
+        raise ValueError("Inputs must not be empty")
+    if len(tokens_a) != len(tokens_b):
+        raise ValueError(f"Length mismatch: {len(tokens_a)} vs {len(tokens_b)}")
+
+    matches = 0
+    for row_a, row_b in zip(tokens_a, tokens_b):
+        if row_a and row_b and row_a[0] == row_b[0]:
+            matches += 1
+    return matches / len(tokens_a)
+
+
+def topk_token_set_agreement(
+    tokens_a: list[list[str]], tokens_b: list[list[str]], k: int = 5
+) -> float:
+    """Mean Jaccard overlap of the top-k TOKEN sets, per position.
+
+    Robust to small confidence differences reordering tokens within the top-k —
+    which is exactly what differing kernels produce — while still detecting a
+    genuinely different candidate set.
+    """
+    if not tokens_a or not tokens_b:
+        raise ValueError("Inputs must not be empty")
+    if len(tokens_a) != len(tokens_b):
+        raise ValueError(f"Length mismatch: {len(tokens_a)} vs {len(tokens_b)}")
+
+    scores: list[float] = []
+    for row_a, row_b in zip(tokens_a, tokens_b):
+        set_a, set_b = set(row_a[:k]), set(row_b[:k])
+        union = len(set_a | set_b)
+        scores.append(len(set_a & set_b) / union if union else 0.0)
+    return sum(scores) / len(scores)

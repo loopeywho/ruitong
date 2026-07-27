@@ -201,3 +201,21 @@ via subprocess, and almost reported a metric as broken when my own test used a d
 **Why wrong:** both came from acting on a snapshot instead of re-verifying at the moment of writing.
 **Rule:** re-run the check immediately before you write the claim. When a result looks alarming,
 first ask whether the *test* is wrong — construct the realistic case before escalating.
+
+## [2026-07-27] claude — Two false-pass paths that a "green" suite could not see
+**What:** (a) `--reference a=http://x --candidate b=http://x` — different names, same
+URL — passed the self-comparison guard, compared an endpoint with itself, always agreed,
+exit 0. (b) An unreachable backend returned exit 1 (gate failed) instead of 2 (cannot run),
+because the runner swallows connection errors into warnings.
+**Why wrong:** the guard checked the *label* rather than the *thing*; and "broken port" vs
+"we could not measure" were collapsed into one code, so an outage reads as evidence.
+**Rule:** when guarding against comparing a thing with itself, compare the **identity that
+matters** (the URL/target), not the name someone typed. And never let "no data" share an
+exit code with "bad data" — they demand opposite responses.
+
+## [2026-07-27] claude — Measured the exit code through a pipe and got the wrong answer
+**What:** reported "exit 0 despite Passed: NO" and nearly rewrote a working code path. The
+command was piped through `head`, so `$?` was head's status, not the CLI's.
+**Why wrong:** in a pipeline, `$?` is the *last* command's status.
+**Rule:** test exit codes with the command alone, or `set -o pipefail`. Re-running it
+properly is what exposed the two real bugs above — the false reading was hiding them.

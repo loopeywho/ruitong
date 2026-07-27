@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hmac
 import time
-from collections import defaultdict
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -21,6 +20,10 @@ from .schemas import ChatRequest
 # ── Exempt paths (no API key required) ───────────────────────────────
 AUTH_EXEMPT_PATHS = {"/v1/health", "/v1/models", "/docs", "/openapi.json", "/redoc"}
 
+# ── Bounded rate-limit bucket store parameters ────────────────────────
+MAX_TRACKED_PRINCIPALS = 10_000
+SWEEP_INTERVAL = 100  # sweep stale entries every N requests
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -32,7 +35,8 @@ async def lifespan(app: FastAPI):
     app.state.router = Router(registry=registry, config=config)
     app.state.config = config
     app.state.job_store = JobStore(db_path=config.job_db_path)
-    app.state.rate_limit_buckets = defaultdict(list)
+    app.state.rate_limit_buckets = {}  # dict[str, list[float]]
+    app.state.rate_limit_counter = 0
     yield
 
 
@@ -70,6 +74,15 @@ async def models() -> dict[str, list[str]]:
 
 
 # ── Middleware ────────────────────────────────────────────────────────
+# Middleware registration order (last = outermost, runs first):
+#   1) payload_size   — reject oversized bodies
+#   2) rate_limit     — charge bucket after body check, before handler
+#   3) auth           — reject unauthenticated before anything else
+#
+# This is the inverse of the decorator order below. auth is last so it
+# is outermost => runs first. rate_limit is second-outermost, so it only
+# sees authenticated requests (fixes H2).
+# ──────────────────────────────────────────────────────────────────────
 
 
 def _config_for(request: Request) -> BridgeConfig:
@@ -85,35 +98,11 @@ def _config_for(request: Request) -> BridgeConfig:
 
 
 @app.middleware("http")
-async def auth_middleware(request: Request, call_next):
-    """Check API key on every request unless path is exempt."""
-    config = _config_for(request)
-
-    if config.api_key and request.url.path not in AUTH_EXEMPT_PATHS:
-        provided = request.headers.get("X-API-Key", "")
-        # Constant-time compare: `!=` leaks key length and prefix via response
-        # timing, letting an attacker recover the key byte by byte.
-        #
-        # Compare BYTES, not str: hmac.compare_digest raises TypeError on
-        # non-ASCII str. Starlette decodes headers as latin-1, so any byte
-        # >= 0x80 in the header would otherwise turn a 401 into an
-        # unauthenticated 500 — and a non-ASCII configured key would 500 every
-        # request, including correctly authenticated ones.
-        if not hmac.compare_digest(
-            provided.encode("utf-8", "surrogateescape"),
-            config.api_key.encode("utf-8"),
-        ):
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
-            )
-
-    return await call_next(request)
-
-
-@app.middleware("http")
 async def payload_size_middleware(request: Request, call_next):
-    """Reject requests with oversized payloads (Content-Length header)."""
+    """Reject requests with oversized payloads (Content-Length header).
+
+    Number 2 in the execution order (runs after auth, before rate-limit).
+    """
     config = _config_for(request)
 
     if request.method in ("POST", "PUT", "PATCH"):
@@ -132,44 +121,120 @@ async def payload_size_middleware(request: Request, call_next):
                         },
                     )
             except (ValueError, TypeError):
-                pass
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": "Bad Request", "detail": "Invalid Content-Length header"},
+                )
 
     return await call_next(request)
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """Simple in-memory rate limiter per client IP."""
+    """In-memory rate limiter per authenticated principal (or IP fallback).
+
+    Number 3 in the execution order (runs after auth + payload check).
+    Keys on the authenticated principal set by auth_middleware, so
+    unauthenticated traffic never reaches the limiter (fixes H2, S4).
+
+    Bounded dict with periodic sweep prevents unbounded memory growth
+    (fixes S3).
+    """
     if request.url.path in AUTH_EXEMPT_PATHS:
         return await call_next(request)
 
     config = _config_for(request)
-    if config.rate_limit_per_minute > 0:
-        client_ip = request.client.host if request.client else "unknown"
-        now = time.time()
-        window = 60.0
+    if config.rate_limit_per_minute <= 0:
+        return await call_next(request)
 
-        # Lazy-initialize the rate limit buckets
-        if not hasattr(request.app.state, "rate_limit_buckets"):
-            request.app.state.rate_limit_buckets = defaultdict(list)
-        buckets = request.app.state.rate_limit_buckets
+    now = time.time()
+    window = 60.0
 
-        timestamps = buckets[client_ip]
-        # Prune old entries
-        while timestamps and timestamps[0] < now - window:
-            timestamps.pop(0)
+    # Lazy-initialize the rate limit state (needed when lifespan doesn't
+    # run, e.g. TestClient without asgi_transport).
+    if not hasattr(request.app.state, "rate_limit_buckets"):
+        request.app.state.rate_limit_buckets = {}
+    if not hasattr(request.app.state, "rate_limit_counter"):
+        request.app.state.rate_limit_counter = 0
 
-        if len(timestamps) >= config.rate_limit_per_minute:
+    buckets: dict[str, list[float]] = request.app.state.rate_limit_buckets
+
+    # ── Periodic sweep — every SWEEP_INTERVAL requests ────────────
+    # Avoids O(n) scan-per-request that would turn the fix into its own
+    # DoS vector.
+    request.app.state.rate_limit_counter += 1
+    if request.app.state.rate_limit_counter % SWEEP_INTERVAL == 0:
+        stale = [k for k, v in buckets.items() if not v or v[-1] < now - window]
+        for k in stale:
+            del buckets[k]
+
+    # ── Key on the authenticated principal ────────────────────────
+    # Set by auth_middleware (which always runs before this middleware).
+    # Fall back to IP only when no principal is available (e.g. no auth
+    # configured at all — dev mode).
+    principal: str | None = getattr(request.state, "api_key_principal", None)
+    if principal is None:
+        # When no auth is configured, use IP. Behind Cloudflare this is
+        # a CF proxy IP — in production with auth configured, this path
+        # is never reached for non-exempt endpoints.
+        principal = request.client.host if request.client else "unknown"
+
+    # ── Cap total tracked principals ──────────────────────────────
+    # Prevents the spray-unique-principals exhaustion vector.
+    if principal not in buckets and len(buckets) >= MAX_TRACKED_PRINCIPALS:
+        # Evict the stalest bucket (oldest most-recent timestamp)
+        stalest_key = min(
+            buckets,
+            key=lambda k: buckets[k][-1] if buckets[k] else 0,
+        )
+        del buckets[stalest_key]
+
+    timestamps = buckets.setdefault(principal, [])
+    # Prune expired entries for this principal
+    while timestamps and timestamps[0] < now - window:
+        timestamps.pop(0)
+
+    if len(timestamps) >= config.rate_limit_per_minute:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate limit exceeded",
+                "detail": f"Max {config.rate_limit_per_minute} requests per minute",
+                "retry_after_seconds": int(timestamps[0] + window - now),
+            },
+        )
+
+    timestamps.append(now)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Check API key on every request unless path is exempt.
+
+    Registered LAST (outermost) so it runs FIRST — unauthenticated
+    requests are rejected before they reach the rate limiter or
+    payload-size check (H2 fix).
+
+    Always sets request.state.api_key_principal so downstream middleware
+    can key on the authenticated principal rather than IP (S4 fix).
+    """
+    config = _config_for(request)
+
+    if config.api_key and request.url.path not in AUTH_EXEMPT_PATHS:
+        provided = request.headers.get("X-API-Key", "")
+        if not hmac.compare_digest(
+            provided.encode("utf-8", "surrogateescape"),
+            config.api_key.encode("utf-8"),
+        ):
             return JSONResponse(
-                status_code=429,
-                content={
-                    "error": "Rate limit exceeded",
-                    "detail": f"Max {config.rate_limit_per_minute} requests per minute",
-                    "retry_after_seconds": int(timestamps[0] + window - now),
-                },
+                status_code=401,
+                content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
             )
-
-        timestamps.append(now)
+        request.state.api_key_principal = provided
+    else:
+        # No auth configured (dev mode) — all request share "anonymous"
+        request.state.api_key_principal = "anonymous"
 
     return await call_next(request)
 

@@ -16,6 +16,8 @@ from .metrics import (
     max_absolute_difference,
     top_k_agreement,
     top_k_set_agreement,
+    top1_token_agreement,
+    topk_token_set_agreement,
 )
 
 
@@ -199,6 +201,9 @@ class EquivalenceRunner:
             lp_b = resp_b.choices[0].logprobs
             logs_a = lp_a.top_k_matrix() if lp_a is not None else None
             logs_b = lp_b.top_k_matrix() if lp_b is not None else None
+            # Token identity — what top-1/top-5 agreement is meant to compare.
+            toks_a = lp_a.top_k_tokens() if lp_a is not None else None
+            toks_b = lp_b.top_k_tokens() if lp_b is not None else None
             # A server can return the object with an empty content array;
             # treat that as "no logprobs" rather than comparing nothing.
             if not logs_a or not logs_b:
@@ -221,8 +226,15 @@ class EquivalenceRunner:
                 try:
                     cos = cosine_similarity(logs_a, logs_b)
                     abs_diff = max_absolute_difference(logs_a, logs_b)
-                    top1 = top_k_agreement(logs_a, logs_b, k=1)
-                    top5 = top_k_set_agreement(logs_a, logs_b, k=5)
+                    # Compare TOKENS, not positional indices. The index-based
+                    # metrics scored identical output as total disagreement and
+                    # unrelated output as perfect agreement.
+                    if toks_a and toks_b:
+                        top1 = top1_token_agreement(toks_a, toks_b)
+                        top5 = topk_token_set_agreement(toks_a, toks_b, k=5)
+                    else:
+                        top1 = top_k_agreement(logs_a, logs_b, k=1)
+                        top5 = top_k_set_agreement(logs_a, logs_b, k=5)
                     result.cosine_sim = round(cos, 6)
                     result.max_abs_diff = round(abs_diff, 6)
                     result.top1_agreement = round(top1, 6)
