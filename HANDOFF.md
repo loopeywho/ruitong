@@ -129,3 +129,53 @@ report not written on failure · exit-code contract · unbounded `prompts`.
    most commercially. The report *is* the product and the system cannot currently tell one customer
    from another.
 3. **Phase 4.5** — calibrate against a real model on CPU before renting Ascend (`PHASE_4_5_PROPOSAL.md`).
+
+---
+
+# ADDENDUM — 2026-07-27 01:30 · the monetising track
+
+Boss's directive is a **monetising pain point on both sides of the globe**. Two things now exist to
+serve that, and they are the priority above everything in the queue below.
+
+## The harness is vendor-neutral as of `399861a` (D8)
+
+```
+ruitong port <model> --reference nvidia-a100=http://ref:8000 \
+                     --candidate amd-mi300x=http://cand:8000
+```
+
+Any OpenAI-compatible endpoint. One codebase, both markets — Ascend on the China side, AMD ROCm /
+Intel Gaudi / AWS Trainium on the Western side. `cuda`/`ascend` shortcuts still work.
+
+## P0-NEW · Build the public accuracy delta table — `BENCHMARK_SPEC.md`
+
+This outranks the P0/P1/P2 items below. It is the artifact that turns the tool into revenue.
+
+Nobody publishes end-to-end cross-accelerator accuracy deltas — not Huawei, not vllm-ascend (their
+CI accepts 5% drift against a hardcoded value with **no GPU baseline column**), not CAICT, not
+MLCommons. Publishing it first defines the category.
+
+**v1 is one weekend:** Qwen3-8B, NVIDIA vs AMD, three rows (precision noise floor / cross-vendor /
+batch-size effect), 128 prompts, rented by the hour. Legally clean, self-verifiable, transactable
+from Hong Kong today. The Ascend column is **v3 and gated on counsel** — everything transfers
+unchanged because the harness never sees the silicon.
+
+Read `BENCHMARK_SPEC.md` for method, hard rules and acceptance. The hard rules matter more than the
+code: never claim bitwise equivalence, publish results that make us look wrong, ≥3 runs with
+variance, worst-case not just mean, `max_tokens ≥ 128` (at 1, three of four metrics are constant
+by construction).
+
+## Where Qwen/Kimi are uniquely needed
+
+`STRATEGY.md` lists what only sources behind the firewall can settle. Two are now revenue-critical:
+
+- **PBoC `JR/T 0221-2021《人工智能算法金融应用评价规范》`** — nobody has read it. On its title it is the
+  most likely Chinese regulatory hook for compelled equivalence testing. If it mandates anything
+  about model evaluation on infrastructure change, the China side gains a *compelled* buyer, which
+  is the single thing the market research found missing.
+- **信创 procurement acceptance criteria** — does any 国产化替代 standard require 精度对齐 evidence at
+  acceptance? Same question, different door.
+
+A compelled buyer changes the business from "persuade someone to care" to "they must buy". Three
+Western companies selling *voluntary* AI testing pivoted out in the last two years. That is the
+difference these two documents decide.
