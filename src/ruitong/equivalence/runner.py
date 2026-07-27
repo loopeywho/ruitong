@@ -18,6 +18,8 @@ from .metrics import (
     top_k_set_agreement,
     top1_token_agreement,
     topk_token_set_agreement,
+    top_k_max_abs_diff,
+    probability_mass,
 )
 
 
@@ -33,10 +35,29 @@ DEFAULT_TOP_LOGPROBS = 20
 class Thresholds:
     """Pass/fail thresholds for equivalence."""
 
-    COSINE_MIN: float = 0.99
-    MAX_ABS_DIFF_MAX: float = 0.05
+    # ── Gating thresholds (DECISIONS.md D7 — measured, not assumed) ──
+    #
+    # top-k max abs diff: bf16 rounding measures 0.0152; the weakest injected
+    # fault measures 0.2341. 0.05 sits ~3x above the noise and ~5x below the
+    # nearest fault. See CALIBRATION.md.
+    TOPK_MAX_ABS_DIFF_MAX: float = 0.05
+    # probability-mass DELTA between the two backends (top-k only, so an
+    # absolute check against 1.0 would be meaningless). A x1.05 scaling fault
+    # shifts one side by ~0.096 — the defect class top-k max-abs-diff misses.
+    PROB_MASS_TOLERANCE: float = 0.01
     TOP1_MIN: float = 0.99
     TOP5_MIN: float = 0.95
+
+    # ── Reported but NOT gated ──────────────────────────────────────
+    # Both were measured unusable as gates and are kept for continuity of the
+    # report only:
+    #   cosine_similarity — scale-invariant by definition, so x1.01 through
+    #       x2.0 all score exactly 1.0. Blind to scaling faults.
+    #   max_absolute_difference — full-vocab, dominated by tail logprobs near
+    #       -130 (p ~ 1e-57, never sampled). bf16 alone scores 0.4929 against
+    #       a 0.05 threshold, so it would reject every correct port.
+    COSINE_MIN: float = 0.99
+    MAX_ABS_DIFF_MAX: float = 0.05
 
 
 # ── Data structures ─────────────────────────────────────────────────
@@ -56,6 +77,9 @@ class PerPromptResult:
     top1_agreement: float | None = None
     top5_set_agreement: float | None = None
     response_parity: float | None = None
+    # Calibrated metrics — these are the ones that gate (D7).
+    topk_max_abs_diff: float | None = None
+    probability_mass_delta: float | None = None
 
 
 @dataclass
@@ -98,11 +122,15 @@ class EquivalenceReport:
                     "top1_agreement": r.top1_agreement,
                     "top5_set_agreement": r.top5_set_agreement,
                     "response_parity": r.response_parity,
+                    "topk_max_abs_diff": r.topk_max_abs_diff,
+                    "probability_mass_delta": r.probability_mass_delta,
                 }
                 for r in self.per_prompt_results
             ],
             "passed": self.passed,
             "thresholds_used": {
+                "topk_max_abs_diff_max": self.thresholds_used.TOPK_MAX_ABS_DIFF_MAX,
+                "prob_mass_tolerance": self.thresholds_used.PROB_MASS_TOLERANCE,
                 "cosine_min": self.thresholds_used.COSINE_MIN,
                 "max_abs_diff_max": self.thresholds_used.MAX_ABS_DIFF_MAX,
                 "top1_min": self.thresholds_used.TOP1_MIN,
@@ -148,6 +176,8 @@ class EquivalenceRunner:
         all_abs_diffs: list[float] = []
         all_top1: list[float] = []
         all_top5: list[float] = []
+        all_topk_diff: list[float] = []
+        all_mass_delta: list[float] = []
         all_response_parities: list[float] = []
         warnings: list[str] = []
 
@@ -224,6 +254,19 @@ class EquivalenceRunner:
                 # Mode 1: logprob comparison
                 result.mode = "logprob"
                 try:
+                    # Calibrated (gating) metrics.
+                    topk_diff = top_k_max_abs_diff(logs_a, logs_b, k=10)
+                    # Compare mass BETWEEN backends, not against 1.0.
+                    # An OpenAI server returns only the top-k of a ~150k
+                    # vocabulary, so this mass is legitimately far below 1.0
+                    # and an absolute check would be meaningless. But a
+                    # scaling fault shifts one side's mass relative to the
+                    # other, which is exactly what this catches — and it needs
+                    # no access to the full distribution.
+                    mass_delta = abs(
+                        probability_mass(logs_a) - probability_mass(logs_b)
+                    )
+                    # Legacy metrics — reported, not gated.
                     cos = cosine_similarity(logs_a, logs_b)
                     abs_diff = max_absolute_difference(logs_a, logs_b)
                     # Compare TOKENS, not positional indices. The index-based
@@ -235,10 +278,14 @@ class EquivalenceRunner:
                     else:
                         top1 = top_k_agreement(logs_a, logs_b, k=1)
                         top5 = top_k_set_agreement(logs_a, logs_b, k=5)
+                    result.topk_max_abs_diff = round(topk_diff, 6)
+                    result.probability_mass_delta = round(mass_delta, 6)
                     result.cosine_sim = round(cos, 6)
                     result.max_abs_diff = round(abs_diff, 6)
                     result.top1_agreement = round(top1, 6)
                     result.top5_set_agreement = round(top5, 6)
+                    all_topk_diff.append(topk_diff)
+                    all_mass_delta.append(mass_delta)
                     all_cosines.append(cos)
                     all_abs_diffs.append(abs_diff)
                     all_top1.append(top1)
@@ -271,6 +318,15 @@ class EquivalenceRunner:
             compared_prompts=len(prompts) - errored,
             errored_prompts=errored,
             metrics={
+                # Worst case across prompts, not mean. A mean lets one
+                # catastrophic prompt be averaged into silence, and makes the
+                # gate *weaker* the more prompts you add.
+                "topk_max_abs_diff": (
+                    round(max(all_topk_diff), 6) if all_topk_diff else None
+                ),
+                "probability_mass_delta": (
+                    round(max(all_mass_delta), 6) if all_mass_delta else None
+                ),
                 "cosine_similarity": (
                     round(sum(all_cosines) / len(all_cosines), 6)
                     if all_cosines
@@ -301,27 +357,31 @@ class EquivalenceRunner:
             warnings=warnings,
         )
 
-        # Check thresholds — only set passed=True if ALL checked metrics pass
-        any_metrics = False
-        all_pass = True
+        # ── Gate (DECISIONS.md D7) ──────────────────────────────────
+        #
+        # Only the calibrated metrics gate. cosine_similarity and full-vocab
+        # max_absolute_difference are computed and reported for continuity,
+        # but deliberately NOT gated: measurement showed the first is blind to
+        # scaling faults and the second rejects every correct BF16 port.
+        gated: list[bool] = []
         m = report.metrics
-        if m.get("cosine_similarity") is not None:
-            any_metrics = True
-            if m["cosine_similarity"] < Thresholds.COSINE_MIN:
-                all_pass = False
-        if m.get("max_absolute_difference") is not None:
-            any_metrics = True
-            if m["max_absolute_difference"] > Thresholds.MAX_ABS_DIFF_MAX:
-                all_pass = False
+
+        if m.get("topk_max_abs_diff") is not None:
+            gated.append(
+                m["topk_max_abs_diff"] <= Thresholds.TOPK_MAX_ABS_DIFF_MAX
+            )
+        if m.get("probability_mass_delta") is not None:
+            gated.append(
+                m["probability_mass_delta"] <= Thresholds.PROB_MASS_TOLERANCE
+            )
         if m.get("top1_agreement") is not None:
-            any_metrics = True
-            if m["top1_agreement"] < Thresholds.TOP1_MIN:
-                all_pass = False
+            gated.append(m["top1_agreement"] >= Thresholds.TOP1_MIN)
         if m.get("top5_set_agreement") is not None:
-            any_metrics = True
-            if m["top5_set_agreement"] < Thresholds.TOP5_MIN:
-                all_pass = False
-        if any_metrics and all_pass:
-            report.passed = True
+            gated.append(m["top5_set_agreement"] >= Thresholds.TOP5_MIN)
+
+        # No gated metric means nothing was measured. That is "could not
+        # determine", never "equivalent" — a report with no evidence must not
+        # certify a port.
+        report.passed = bool(gated) and all(gated)
 
         return report

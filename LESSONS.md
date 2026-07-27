@@ -219,3 +219,35 @@ command was piped through `head`, so `$?` was head's status, not the CLI's.
 **Why wrong:** in a pipeline, `$?` is the *last* command's status.
 **Rule:** test exit codes with the command alone, or `set -o pipefail`. Re-running it
 properly is what exposed the two real bugs above — the false reading was hiding them.
+
+## [2026-07-27] measurement-layer — Nearly rewrote main.py that already had the fixes
+**What:** context compaction showed an 8,411-char main.py with auth-first registration and
+defaultdict buckets. Opus 5 had already committed H2/S3/S4 fixes at 02:53 (2b28b3b). My
+write_file of the "new" version matched the committed file byte-for-byte — no-op.
+**Why wrong:** the compaction summary was a snapshot from earlier in the session; the tree
+had moved on while I was blocked.
+**Rule:** always `git log --oneline -3` and quick-read the relevant file before starting
+work on it. The compaction summary is a reference, not the current state.
+
+## [2026-07-27] claude — A mutation test left a stale .pyc and I believed the fake failures
+**What:** temporarily loosened a threshold to prove the sensitivity suite wasn't vacuous, restored
+the file, and kept seeing 3 failures. `grep` showed the file was correct (0.05); Python was
+importing 99.0 from a cached `__pycache__` of the mutated module. I nearly started "fixing" tests
+that were already right.
+**Why wrong:** editing a module out-of-band (sed/cp rather than a normal write) can leave bytecode
+that no longer matches source, and the mismatch is invisible to `grep`.
+**Rule:** after any out-of-band edit or mutation experiment, clear `__pycache__` and `.pytest_cache`
+before trusting a result. And when source and behaviour disagree, print the value **as imported**
+(`python -c "from mod import X; print(X.FIELD)"`) rather than reading the file — the interpreter's
+view is the one that matters.
+
+## [2026-07-27] claude — Calibrated on full-vocab data, gated on top-k data
+**What:** added a probability-mass check comparing `sum(exp(logprob))` against 1.0. Calibration used
+a full 512-token vocabulary where that holds. But an OpenAI server returns only the **top-k** of a
+~150k vocabulary, whose mass is legitimately ~0.16, so the check failed every correct run.
+**Why wrong:** the calibration fixture and the production input were different shapes. A threshold is
+only valid for the data shape it was measured on.
+**Fix/rule:** compare the mass **between the two backends** instead of against an absolute — a
+scaling fault shifts one side relative to the other and needs no full distribution. Measured
+afterwards: 0.00048 for an equivalent BF16 port vs 0.0952 for a x1.05 scaling fault. **Always
+calibrate on the exact shape the wire delivers.**
