@@ -64,6 +64,23 @@
   .pass{color:var(--ok);font-weight:600}
   .fail{color:var(--accent);font-weight:600}
 
+  .contact{background:var(--card);border:1px solid var(--line);border-radius:10px;
+           padding:26px;margin:34px 0 8px}
+  .contact h2{margin-top:0}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13.5px;font-weight:600;margin-bottom:5px}
+  .field input,.field select,.field textarea{
+    width:100%;font:inherit;font-size:14px;padding:9px 11px;color:var(--fg);
+    background:var(--bg);border:1px solid var(--line);border-radius:6px}
+  .field textarea{min-height:96px;resize:vertical}
+  .field input:focus,.field select:focus,.field textarea:focus{
+    outline:none;border-color:var(--accent)}
+  .send{background:var(--accent);color:#fff;border-color:var(--accent);
+        padding:10px 20px;font-size:14px;font-weight:600}
+  .send:hover{opacity:.9;border-color:var(--accent)}
+  .direct{font-size:13.5px;color:var(--mut);margin-top:14px}
+  .direct a{font-family:var(--mono)}
+
   footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);
          font-size:14px;color:var(--mut)}
   a{color:var(--accent)}
@@ -201,6 +218,45 @@
   <p>The reference table is public and free. If you need it run on <strong>your</strong> model and
   <strong>your</strong> hardware, with a signed, provenance-bound report, get in touch.</p>
 
+  <section class="contact">
+    <h2 style="margin-bottom:6px">Get in touch</h2>
+    <p class="mut" style="font-size:14.5px">Tell us what you're migrating. We reply to every
+    technical enquiry, including ones we can't help with.</p>
+
+    <div class="field">
+      <label for="e-org">Name / organisation</label>
+      <input id="e-org" type="text" autocomplete="organization">
+    </div>
+    <div class="field">
+      <label for="e-from">Migrating from</label>
+      <select id="e-from">
+        <option>NVIDIA (CUDA)</option><option>AMD (ROCm)</option>
+        <option>Intel Gaudi</option><option>AWS Trainium</option>
+        <option>Huawei Ascend (CANN)</option><option>Other / not sure</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="e-to">Migrating to</label>
+      <select id="e-to">
+        <option>Huawei Ascend (CANN)</option><option>AMD (ROCm)</option>
+        <option>NVIDIA (CUDA)</option><option>Intel Gaudi</option>
+        <option>AWS Trainium</option><option>Other / not sure</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="e-model">Model(s)</label>
+      <input id="e-model" type="text" placeholder="e.g. Qwen3-8B, or a private fine-tune">
+    </div>
+    <div class="field">
+      <label for="e-msg">What do you need to prove, and to whom?</label>
+      <textarea id="e-msg" placeholder="e.g. our risk team needs evidence the ported model behaves the same"></textarea>
+    </div>
+    <button class="send" data-mail="en">Compose email →</button>
+    <p class="direct">Opens your mail client with the details filled in — nothing is sent through
+    this page, and no third party sees your enquiry. Or write directly to
+    <a href="mailto:hello@ruitong.io">hello@ruitong.io</a>.</p>
+  </section>
+
 </main>
 
 <!-- ─────────────── 中文 ─────────────── -->
@@ -288,6 +344,43 @@
 
   <p>参考基准表公开且免费。如果需要在<strong>您自己的模型</strong>与<strong>您自己的硬件</strong>上运行，并出具带完整溯源的签署报告，欢迎联系。</p>
 
+  <section class="contact">
+    <h2 style="margin-bottom:6px">联系我们</h2>
+    <p class="mut" style="font-size:14.5px">请说明您正在迁移的内容。所有技术咨询我们都会回复，包括我们帮不上忙的情况。</p>
+
+    <div class="field">
+      <label for="z-org">姓名 ／ 单位</label>
+      <input id="z-org" type="text" autocomplete="organization">
+    </div>
+    <div class="field">
+      <label for="z-from">迁移自</label>
+      <select id="z-from">
+        <option>NVIDIA（CUDA）</option><option>AMD（ROCm）</option>
+        <option>Intel Gaudi</option><option>AWS Trainium</option>
+        <option>华为昇腾（CANN）</option><option>其他 ／ 尚未确定</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="z-to">迁移至</label>
+      <select id="z-to">
+        <option>华为昇腾（CANN）</option><option>AMD（ROCm）</option>
+        <option>NVIDIA（CUDA）</option><option>Intel Gaudi</option>
+        <option>AWS Trainium</option><option>其他 ／ 尚未确定</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="z-model">模型</label>
+      <input id="z-model" type="text" placeholder="例如 Qwen3-8B，或内部微调模型">
+    </div>
+    <div class="field">
+      <label for="z-msg">您需要证明什么？向谁证明？</label>
+      <textarea id="z-msg" placeholder="例如：风控部门需要证据，说明迁移后模型行为保持一致"></textarea>
+    </div>
+    <button class="send" data-mail="zh">生成邮件 →</button>
+    <p class="direct">将打开您的邮件客户端并自动填好内容——本页面不发送任何数据，也没有第三方能看到您的咨询。也可直接写信至
+    <a href="mailto:hello@ruitong.io">hello@ruitong.io</a>。</p>
+  </section>
+
 </main>
 
 <footer>
@@ -312,6 +405,29 @@
     langBtn.textContent = zh?'EN':'中文';
     langBtn.setAttribute('aria-pressed', zh?'true':'false');
   });
+  // Compose a structured mailto. No backend, no third-party form service:
+  // enquiries go straight from the sender's mail client to the inbox, so no
+  // one else ever sees a lead.
+  document.querySelectorAll('.send').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var p = btn.getAttribute('data-mail')==='zh' ? 'z' : 'e';
+      var v = function(id){ var el=document.getElementById(p+'-'+id); return el?el.value.trim():''; };
+      var isZh = p==='z';
+      var org=v('org')||(isZh?'（未填写）':'(not given)');
+      var subject = isZh
+        ? '等价性验证咨询 — '+org
+        : 'Equivalence enquiry — '+org;
+      var body = (isZh
+        ? ['姓名／单位： '+org,'迁移自： '+v('from'),'迁移至： '+v('to'),
+           '模型： '+(v('model')||'（未填写）'),'','需要证明的内容：',v('msg')||'（未填写）']
+        : ['Name / organisation: '+org,'Migrating from: '+v('from'),'Migrating to: '+v('to'),
+           'Model(s): '+(v('model')||'(not given)'),'','What needs proving:',v('msg')||'(not given)']
+      ).join('\n');
+      window.location.href='mailto:hello@ruitong.io?subject='+
+        encodeURIComponent(subject)+'&body='+encodeURIComponent(body);
+    });
+  });
+
   var dark=matchMedia('(prefers-color-scheme:dark)').matches;
   themeBtn.addEventListener('click',function(){
     dark=!dark;
