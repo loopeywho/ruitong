@@ -124,56 +124,80 @@
     them gives you a number to compare against.</p>
   </div>
 
-  <h2>What the gate detects — measured</h2>
+  <h2>What the gate detects — measured on real hardware</h2>
 
-  <p>Before publishing accuracy deltas we had to establish that our own measurement works. We
-  injected faults that mimic real porting failures and recorded whether the gate catches them, and
-  at what magnitude. <strong>These are measured results, reproducible on CPU in seconds.</strong></p>
+  <p>Before publishing accuracy deltas we had to establish that our own measurement works. It is
+  calibrated against a corpus of real logprobs captured from <strong>Qwen3-8B running on an NVIDIA
+  A40</strong>, not from synthetic fixtures. We inject faults that mimic real porting failures and
+  record whether the gate catches them, and at what magnitude.</p>
+
+  <p class="mut">Rig: vLLM, <code>temperature=0, seed=1234, top_logprobs=20</code>, 16 prompts
+  (EN + 中文). The corpus is published, so every number below is reproducible offline.</p>
 
   <div class="scroll">
   <table>
-    <thead><tr><th>Scenario</th><th>What it mimics</th><th>top-10 max Δlogprob</th><th>prob. mass</th><th>Verdict</th></tr></thead>
+    <thead><tr><th>Scenario</th><th>What it mimics</th><th>token-matched Δprob</th><th>Verdict</th></tr></thead>
     <tbody>
-      <tr><td>Identical</td><td>—</td><td class="num">0.0000</td><td class="num">1.000000</td><td class="pass">pass</td></tr>
-      <tr><td>bfloat16 rounding</td><td>correct port, different precision</td><td class="num">0.0152</td><td class="num">0.999877</td><td class="pass">pass</td></tr>
-      <tr><td>Scale logprobs ×1.05</td><td>softmax / temperature bug</td><td class="num">0.2341</td><td class="num">0.904455</td><td class="fail">fail</td></tr>
-      <tr><td>Swap top-2 tokens</td><td>transposed operator output</td><td class="num">0.6472</td><td class="num">1.000000</td><td class="fail">fail</td></tr>
-      <tr><td>Shift positions by 1</td><td>off-by-one in KV-cache indexing</td><td class="num">0.4476</td><td class="num">1.000000</td><td class="fail">fail</td></tr>
-      <tr><td>Corrupt 12.5% of positions</td><td>intermittent kernel fault</td><td class="num">5.0000</td><td class="num">9.472036</td><td class="fail">fail</td></tr>
+      <tr><td>Identical</td><td>—</td><td class="num">0.0</td><td class="pass">pass</td></tr>
+      <tr><td>bfloat16 rounding</td><td>correct port, different precision</td><td class="num">1.29e-03</td><td class="pass">pass</td></tr>
+      <tr><td>Scale logprobs ×1.01</td><td>1% temperature error</td><td class="num">3.66e-03</td><td class="fail">fail</td></tr>
+      <tr><td>Scale logprobs ×1.05</td><td>softmax / temperature bug</td><td class="num">1.80e-02</td><td class="fail">fail</td></tr>
+      <tr><td>Corrupt 1 position in 8</td><td>intermittent kernel fault</td><td class="num">0.993</td><td class="fail">fail</td></tr>
+      <tr><td>Swap top-2 tokens</td><td>transposed operator output</td><td class="num">1.000</td><td class="fail">fail</td></tr>
+      <tr><td>Shift positions by 1</td><td>off-by-one in KV-cache indexing</td><td class="num">1.000</td><td class="fail">fail</td></tr>
+      <tr><td>Demote the argmax</td><td>catastrophic port failure</td><td class="num">1.000</td><td class="fail">fail</td></tr>
     </tbody>
   </table>
   </div>
 
-  <p><strong>Separation is 15×</strong> between a correct BF16 port (0.0152) and the weakest injected
-  fault (0.2341). That margin is what makes a threshold meaningful.</p>
+  <p>The threshold sits at <strong>2.2e-03</strong>, the geometric mean of the noise ceiling and
+  the weakest fault. The margin is <strong>1.7×</strong> in each direction. We would rather state
+  that plainly than imply more precision than we have: <strong>a temperature error below roughly
+  1% is at or past this gate&rsquo;s detection limit.</strong></p>
 
-  <h3>Two things we found while calibrating, which we would rather publish than hide</h3>
+  <h3>Three things we found while calibrating, which we would rather publish than hide</h3>
+
+  <p><strong>vLLM is bit-exact — but only once the prefix cache is warm.</strong> Repeat a request
+  on a warm server and every logprob is identical to the last bit (16 of 16 prompts). But a
+  prompt&rsquo;s <em>first</em> execution takes zero cache hits and returns measurably different
+  logprobs — up to <strong>0.087</strong> in token probability, while the generated text stays
+  identical. That is <strong>24× larger than the weakest fault we need to catch.</strong></p>
+
+  <p class="mut">This is the trap in any naive A-vs-B accuracy comparison: whichever backend
+  happens to be colder looks broken, and the benchmark measures the cache rather than the silicon.
+  Our harness warms both sides on every prompt and discards the result before measuring. Once warm,
+  the reference contributes <em>zero</em> noise — which is what makes it possible to attribute a
+  difference to the target at all.</p>
 
   <p><strong>Cosine similarity cannot detect scaling errors.</strong> It is scale-invariant by
   definition — multiply every logprob by 1.01 or by 2.0 and it returns exactly
   <code>1.0000000000</code> either way. It is widely used for this purpose and it is the wrong
   instrument. We dropped it.</p>
 
-  <p><strong>Max-absolute-difference over the full vocabulary is dominated by noise.</strong> Under
-  BF16 the largest differences land on tokens with logprobs around −130 — probabilities near
-  1e-57, tokens that will never be sampled. Measured over the full vocabulary a correct BF16 port
-  scores 0.4929; measured over the top 10 tokens it scores 0.0152. A threshold set on the former
-  rejects every correct port.</p>
+  <p><strong>Comparing logprobs by rank compares the wrong tokens.</strong> Deep in the top-k many
+  tokens are near-tied, so a negligible perturbation swaps their order — we recorded rank 3 holding
+  <code>&#39;高&#39;</code> on one side and <code>&#39; like&#39;</code> on the other. And in log space a
+  0.5 shift at logprob −26 (a probability near 1e-12, a token that will never be sampled) scores
+  the same as a 0.5 shift at the most likely token, which changes the output. Measured on real
+  hardware, that metric&rsquo;s noise and its faults <em>overlap</em>: no threshold separates them.
+  We match tokens by identity and compare probabilities instead.</p>
 
   <h2>The accuracy delta table</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>Pending hardware runs.</strong> We will not publish numbers we have
-    not measured. The table below lists the configurations queued for v1; results and raw JSON land
-    here as each completes. The method, thresholds and tooling above are final and already
-    reproducible.</p>
+    <p style="margin:0"><strong>Cross-vendor runs still pending.</strong> We will not publish numbers we have
+    not measured. The single-GPU baseline is now measured and shown below; the cross-vendor and
+    Ascend rows are not, and are marked accordingly. Results and raw JSON land here as each
+    completes.</p>
   </div>
 
   <div class="scroll">
   <table>
     <thead><tr><th>Model</th><th>Reference</th><th>Candidate</th><th>Question it answers</th><th>Status</th></tr></thead>
     <tbody>
-      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the noise floor?</td><td class="mut">queued</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>A40 bf16, warm</td><td>Is the reference itself reproducible?</td><td class="pass">done — bit-exact, 16/16</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16, cold</td><td>A40 bf16, warm</td><td>Does cache state move it?</td><td class="pass">done — 0.087, see above</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the cross-precision noise floor?</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
       <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Model-dependence</td><td class="mut">queued</td></tr>
@@ -274,43 +298,53 @@
     <p style="margin:0"><strong>空白在哪里。</strong>华为 <code>msprobe</code> 在算子级别做张量比对；MLCommons 为少数基准模型公布 FP32 的 99%／99.9% 门限；而 vLLM 自己的昇腾精度 CI <strong>允许对硬编码数值有 5% 的漂移，且完全没有 GPU 基线列</strong>。它们都让你去跑精度测试，却都没有给出可对照的数值。</p>
   </div>
 
-  <h2>门限能检出什么——实测</h2>
+  <h2>门限能检出什么——真实硬件实测</h2>
 
-  <p>在发布精度差异之前，我们必须先证明自己的度量是有效的。我们注入了模拟真实迁移故障的扰动，记录门限是否能检出、以及在多大幅度上能检出。<strong>以下均为实测结果，在 CPU 上数秒即可复现。</strong></p>
+  <p>在发布精度差异之前，我们必须先证明自己的度量是有效的。门限的校准基准，是从<strong>运行在 NVIDIA A40 上的 Qwen3-8B</strong> 采集的真实 logprob 语料，而非合成数据。我们注入模拟真实迁移故障的扰动，记录门限是否能检出、以及在多大幅度上能检出。</p>
+
+  <p class="mut">测试环境：vLLM，<code>temperature=0, seed=1234, top_logprobs=20</code>，16 条提示词（中英文各半）。语料已公开，以下每个数字均可离线复现。</p>
 
   <div class="scroll">
   <table>
-    <thead><tr><th>场景</th><th>模拟的故障</th><th>top-10 最大 Δlogprob</th><th>概率质量</th><th>判定</th></tr></thead>
+    <thead><tr><th>场景</th><th>模拟的故障</th><th>token 对齐的 Δ概率</th><th>判定</th></tr></thead>
     <tbody>
-      <tr><td>完全相同</td><td>—</td><td class="num">0.0000</td><td class="num">1.000000</td><td class="pass">通过</td></tr>
-      <tr><td>bfloat16 舍入</td><td>正确迁移，精度不同</td><td class="num">0.0152</td><td class="num">0.999877</td><td class="pass">通过</td></tr>
-      <tr><td>logprob 缩放 ×1.05</td><td>softmax／温度参数缺陷</td><td class="num">0.2341</td><td class="num">0.904455</td><td class="fail">失败</td></tr>
-      <tr><td>交换 top-2 token</td><td>算子输出转置</td><td class="num">0.6472</td><td class="num">1.000000</td><td class="fail">失败</td></tr>
-      <tr><td>位置整体偏移 1</td><td>KV cache 索引差一</td><td class="num">0.4476</td><td class="num">1.000000</td><td class="fail">失败</td></tr>
-      <tr><td>12.5% 位置被污染</td><td>间歇性 kernel 故障</td><td class="num">5.0000</td><td class="num">9.472036</td><td class="fail">失败</td></tr>
+      <tr><td>完全相同</td><td>—</td><td class="num">0.0</td><td class="pass">通过</td></tr>
+      <tr><td>bfloat16 舍入</td><td>正确迁移，精度不同</td><td class="num">1.29e-03</td><td class="pass">通过</td></tr>
+      <tr><td>logprob 缩放 ×1.01</td><td>1% 温度参数误差</td><td class="num">3.66e-03</td><td class="fail">失败</td></tr>
+      <tr><td>logprob 缩放 ×1.05</td><td>softmax／温度参数缺陷</td><td class="num">1.80e-02</td><td class="fail">失败</td></tr>
+      <tr><td>每 8 个位置污染 1 个</td><td>间歇性 kernel 故障</td><td class="num">0.993</td><td class="fail">失败</td></tr>
+      <tr><td>交换 top-2 token</td><td>算子输出转置</td><td class="num">1.000</td><td class="fail">失败</td></tr>
+      <tr><td>位置整体偏移 1</td><td>KV cache 索引差一</td><td class="num">1.000</td><td class="fail">失败</td></tr>
+      <tr><td>最大概率 token 被降权</td><td>灾难性迁移失败</td><td class="num">1.000</td><td class="fail">失败</td></tr>
     </tbody>
   </table>
   </div>
 
-  <p>正确的 BF16 迁移（0.0152）与最弱的注入故障（0.2341）之间<strong>相差 15 倍</strong>。正是这个间距，让门限具有实际意义。</p>
+  <p>门限设在 <strong>2.2e-03</strong>，即噪声上限与最弱故障的几何平均值，两侧各留 <strong>1.7 倍</strong>裕度。与其暗示我们拥有更高的精度，不如把话说清楚：<strong>低于约 1% 的温度参数误差，已处于本门限的检出极限之外。</strong></p>
 
-  <h3>校准过程中的两个发现——我们宁愿公开，也不愿隐去</h3>
+  <h3>校准过程中的三个发现——我们宁愿公开，也不愿隐去</h3>
+
+  <p><strong>vLLM 是逐比特可复现的——但前提是 prefix cache 已预热。</strong>在已预热的服务上重复同一请求，每个 logprob 都逐比特相同（16 条提示词全部如此）。但一条提示词的<em>首次</em>执行 cache 命中数为零，返回的 logprob 有可测量的差异——token 概率最大相差 <strong>0.087</strong>，而生成的文本完全一致。这个幅度是我们需要检出的最弱故障的 <strong>24 倍</strong>。</p>
+
+  <p class="mut">这正是任何朴素 A／B 精度对比的陷阱：哪一端更"冷"，哪一端就显得有问题，而这个基准测的其实是缓存，不是芯片。我们的工具会在每条提示词上先预热两端并丢弃结果，然后才开始测量。预热之后，参考端贡献的噪声<em>为零</em>——只有这样，才谈得上把差异归因于被测端。</p>
 
   <p><strong>余弦相似度无法检出缩放类错误。</strong>它在定义上就是尺度不变的——把所有 logprob 乘以 1.01 或乘以 2.0，返回值都精确等于 <code>1.0000000000</code>。这个指标被广泛用于此类比对，但它是错误的工具。我们已弃用。</p>
 
-  <p><strong>全词表的最大绝对差被噪声主导。</strong>在 BF16 下，最大差异出现在 logprob 约 −130 的 token 上——概率约 1e-57，永远不会被采样到。同一次正确的 BF16 迁移，按全词表计算得 0.4929，按 top-10 计算仅为 0.0152。若按前者设定门限，任何正确的迁移都会被判为失败。</p>
+  <p><strong>按排名比对 logprob，比的是不同的 token。</strong>在 top-k 的尾部，大量 token 概率非常接近，极微小的扰动就会让它们互换次序——我们实测到同一位置的 rank 3，一侧是 <code>&#39;高&#39;</code>，另一侧是 <code>&#39; like&#39;</code>。而在对数空间中，logprob −26 处（概率约 1e-12，永远不会被采样）的 0.5 偏移，与最大概率 token 上的 0.5 偏移得分相同，后者却会改变输出。在真实硬件上，该指标的噪声与故障区间<em>相互重叠</em>：不存在任何能区分二者的门限。我们改为按 token 身份对齐，并在概率空间比对。</p>
 
   <h2>精度差异表</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>等待硬件实测。</strong>我们不会发布没有实测过的数字。下表列出 v1 排期的配置；每完成一项，结果与原始 JSON 将在此更新。上方的方法、门限与工具链已定稿，且现在即可复现。</p>
+    <p style="margin:0"><strong>跨厂商测试仍在排期。</strong>我们不会发布没有实测过的数字。单卡基线现已实测，列于下表；跨厂商与昇腾两行尚未完成，已如实标注。每完成一项，结果与原始 JSON 将在此更新。</p>
   </div>
 
   <div class="scroll">
   <table>
     <thead><tr><th>模型</th><th>参考端</th><th>被测端</th><th>回答的问题</th><th>状态</th></tr></thead>
     <tbody>
-      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>噪声基线是多少？</td><td class="mut">排期中</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>A40 bf16，已预热</td><td>参考端自身是否可复现？</td><td class="pass">已完成——逐比特一致，16/16</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16，冷启动</td><td>A40 bf16，已预热</td><td>缓存状态是否影响结果？</td><td class="pass">已完成——0.087，见上文</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>跨精度噪声基线是多少？</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>跨厂商、同精度</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>仅 batch 变化会影响吗？</td><td class="mut">排期中</td></tr>
       <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>是否与模型相关</td><td class="mut">排期中</td></tr>

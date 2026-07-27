@@ -1,13 +1,70 @@
-# Handoff — Claude → Qwen / Kimi · 2026-07-27 ~02:00
+# Handoff — Claude → Qwen / Kimi · 2026-07-27 (updated ~19:30, HEAD `a8722f0`)
 
 **Division of labour (Boss, 2026-07-27):** Claude audits and sets direction. Qwen and Kimi build.
 Their edge is what sits behind the firewall — Chinese-language CANN documentation, Huawei developer
 forums, Gitee, and mainland resources Claude cannot reach. Route anything needing those to them.
 
-**Read first:** `LESSONS.md` (recurring bug classes — **append your own mistakes**),
-`DECISIONS.md` (what was decided and why), `PLAN.md` rules 7–10.
+---
 
-**State at handoff:** `git log` HEAD, mypy clean across 20 modules. Run
+## ⚠️ READ THIS FIRST — the gate you were building against has changed
+
+We rented a real GPU (NVIDIA A40, `Qwen/Qwen3-8B`) for the first time. **It invalidated the
+D7 gate.** If you are holding work that touches `equivalence/`, rebase onto `a8722f0` before
+continuing — thresholds, the primary metric, and the runner's request pattern all changed.
+
+**What broke, and why it matters to how you write code:**
+
+The old primary metric scored **1.25 between two *correct* executions** against its own **0.05**
+threshold. It rejected the reference model compared with itself. 202 tests passed and mypy was
+clean the entire time.
+
+The single shared cause of that — and of three other bugs found the same evening — was
+**fixtures returning a shape no real server produces**:
+
+| what the fixture returned | what a real vLLM server returns |
+|---|---|
+| `logprobs: list[float]` | `{"content": [{"token":…, "top_logprobs":[…]}]}` |
+| `/v1/models` → bare list | `{"object":"list","data":[{"id":…}]}` |
+| unique token strings per row | **nine distinct ids all decoding to `""`** |
+| top-10 spread over a narrow range | top-10 spanning logprob 0 to −29 |
+
+Test count, coverage % and a clean type-check **cannot** detect this, because all three measure
+agreement with the fixture. Only contact with a real system detects it.
+
+**The three habits that would have caught all four bugs — adopt them:**
+
+1. **Pin at least one test to a payload captured verbatim from a real server**, with a comment
+   saying where and when it came from. See `tests/test_vllm_http.py::TestRealModelsEnvelope`.
+   If you cannot capture one, say the code is unverified rather than shipping green tests.
+2. **Test every comparison metric for reflexivity: `metric(x, x)` must be exactly 0.** One line.
+   It would have caught the token-string collision immediately.
+3. **Mutation-test your suite.** Break the thing on purpose, confirm tests fail, restore. A test
+   that cannot fail is documentation. Worked examples are in this commit's message.
+
+Full write-up: `CALIBRATION.md` (numbers + method), `DECISIONS.md` D9 (what changed and why),
+`LESSONS.md` Round 5 (six mistakes, mine, with the rule each one produced).
+
+**Please append your own mistakes to `LESSONS.md` in the same format.** The file exists so the
+next model does not repeat what the last one learned — that is worth more than any single fix,
+and it is a skill that transfers to every project you work on, not just this one.
+
+### New tools you can use without a GPU
+
+- `tools/capture_corpus.py` — pull a real logprob corpus from any OpenAI-compatible endpoint.
+- `corpora/cuda_a40_qwen3_8b.json` — **already captured, committed, 333 KB.** Real Qwen3-8B
+  output. Use it instead of writing new fixtures.
+- `tools/calibrate_from_corpus.py` — replay fault injection offline; prints the separation
+  analysis. Run it after any change to `metrics.py` or `Thresholds`.
+- `tools/measure_noise_floor.py` — needs a live endpoint.
+
+**Rule going forward: GPU time is the scarce resource, analysis is free.** Capture once to
+`corpora/`, then iterate offline. Never burn GPU hours on something a saved corpus can answer.
+
+---
+
+**Read next:** `LESSONS.md`, `DECISIONS.md`, `PLAN.md` rules 7–10.
+
+**State at handoff:** HEAD `a8722f0`, **212 passed, mypy clean, 80% coverage**. Run
 `uv run --extra dev pytest -q` and `uv run mypy src/ruitong` before starting and quote the output.
 
 ---
