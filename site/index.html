@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>瑞通 Ruitong — Cross-Accelerator Equivalence Reference</title>
+<meta name="description" content="Reference accuracy deltas for the same LLM across different accelerators. Open method, reproducible, vendor-neutral.">
+<style>
+  :root{
+    --bg:#fbfbfa; --fg:#1a1a18; --mut:#6b6b66; --line:#e3e3df;
+    --card:#fff; --accent:#b4471f; --ok:#2f6f4f; --warn:#8a6d1f;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{--bg:#141413;--fg:#eeeeec;--mut:#a3a39d;--line:#2c2c29;
+          --card:#1c1c1a;--accent:#e07850;--ok:#7fc09b;--warn:#d4b45c;}
+  }
+  :root[data-theme="dark"]{--bg:#141413;--fg:#eeeeec;--mut:#a3a39d;--line:#2c2c29;
+          --card:#1c1c1a;--accent:#e07850;--ok:#7fc09b;--warn:#d4b45c;}
+  :root[data-theme="light"]{--bg:#fbfbfa;--fg:#1a1a18;--mut:#6b6b66;--line:#e3e3df;
+          --card:#fff;--accent:#b4471f;--ok:#2f6f4f;--warn:#8a6d1f;}
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",
+            "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:0 24px 96px}
+  header{border-bottom:1px solid var(--line);margin-bottom:44px;
+         padding:28px 0 24px;display:flex;align-items:center;
+         justify-content:space-between;gap:16px;flex-wrap:wrap}
+  .brand{font-size:20px;font-weight:600;letter-spacing:-.01em}
+  .brand span{color:var(--mut);font-weight:400;margin-left:8px;font-size:15px}
+  .controls{display:flex;gap:8px}
+  button{font:inherit;font-size:13px;padding:6px 13px;border:1px solid var(--line);
+         background:var(--card);color:var(--fg);border-radius:6px;cursor:pointer}
+  button:hover{border-color:var(--mut)}
+  button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+
+  h1{font-size:clamp(28px,5vw,40px);line-height:1.15;letter-spacing:-.022em;
+     margin:0 0 18px;font-weight:650}
+  h2{font-size:20px;margin:52px 0 14px;letter-spacing:-.01em;font-weight:620}
+  h3{font-size:16px;margin:30px 0 8px;font-weight:620}
+  p{margin:0 0 16px}
+  .lede{font-size:18px;color:var(--mut);margin-bottom:28px}
+  .mut{color:var(--mut)}
+  small{font-size:13.5px;color:var(--mut)}
+  code{font-family:var(--mono);font-size:.9em;background:var(--card);
+       border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  pre{background:var(--card);border:1px solid var(--line);border-radius:8px;
+      padding:16px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.55}
+  pre code{background:none;border:none;padding:0}
+
+  .callout{border-left:3px solid var(--accent);background:var(--card);
+           padding:14px 18px;border-radius:0 8px 8px 0;margin:22px 0}
+  .callout.pending{border-left-color:var(--warn)}
+
+  .scroll{overflow-x:auto;margin:18px 0;border:1px solid var(--line);border-radius:8px}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+  th{font-weight:600;background:var(--card);white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.num{font-family:var(--mono);white-space:nowrap}
+  .pass{color:var(--ok);font-weight:600}
+  .fail{color:var(--accent);font-weight:600}
+
+  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);
+         font-size:14px;color:var(--mut)}
+  a{color:var(--accent)}
+  [data-lang]{display:none}
+  [data-lang].on{display:block}
+  th[data-lang].on,td[data-lang].on,span[data-lang].on{display:table-cell}
+  span[data-lang].on{display:inline}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">瑞通 Ruitong<span>ruitong.io</span></div>
+  <div class="controls">
+    <button id="lang" aria-pressed="false">中文</button>
+    <button id="theme" aria-pressed="false">◐</button>
+  </div>
+</header>
+
+<!-- ─────────────── ENGLISH ─────────────── -->
+<main data-lang="en" class="on">
+
+  <h1>The same model, different accelerators.<br>How much do the answers actually change?</h1>
+
+  <p class="lede">Nobody publishes this number. We are going to.</p>
+
+  <p>If you move an LLM from NVIDIA to AMD, Huawei Ascend, Intel Gaudi or AWS Trainium, the outputs
+  will not be identical. Floating-point arithmetic is not associative, so different kernels reduce in
+  a different order and the logprobs shift. That is expected and unavoidable.</p>
+
+  <p>The question that matters is <strong>how much</strong> — and whether the change you are seeing is
+  ordinary numerical noise or a genuine porting fault. Today there is no public reference to answer
+  that against.</p>
+
+  <div class="callout">
+    <p style="margin:0"><strong>The gap.</strong> Huawei's <code>msprobe</code> compares tensors at
+    the operator level. MLCommons publishes 99%/99.9%-of-FP32 for a handful of benchmark models.
+    vLLM's own Ascend accuracy CI accepts <strong>5% drift against a hardcoded value with no GPU
+    baseline column at all</strong>. Every one of them tells you to run an accuracy test. None of
+    them gives you a number to compare against.</p>
+  </div>
+
+  <h2>What the gate detects — measured</h2>
+
+  <p>Before publishing accuracy deltas we had to establish that our own measurement works. We
+  injected faults that mimic real porting failures and recorded whether the gate catches them, and
+  at what magnitude. <strong>These are measured results, reproducible on CPU in seconds.</strong></p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Scenario</th><th>What it mimics</th><th>top-10 max Δlogprob</th><th>prob. mass</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Identical</td><td>—</td><td class="num">0.0000</td><td class="num">1.000000</td><td class="pass">pass</td></tr>
+      <tr><td>bfloat16 rounding</td><td>correct port, different precision</td><td class="num">0.0152</td><td class="num">0.999877</td><td class="pass">pass</td></tr>
+      <tr><td>Scale logprobs ×1.05</td><td>softmax / temperature bug</td><td class="num">0.2341</td><td class="num">0.904455</td><td class="fail">fail</td></tr>
+      <tr><td>Swap top-2 tokens</td><td>transposed operator output</td><td class="num">0.6472</td><td class="num">1.000000</td><td class="fail">fail</td></tr>
+      <tr><td>Shift positions by 1</td><td>off-by-one in KV-cache indexing</td><td class="num">0.4476</td><td class="num">1.000000</td><td class="fail">fail</td></tr>
+      <tr><td>Corrupt 12.5% of positions</td><td>intermittent kernel fault</td><td class="num">5.0000</td><td class="num">9.472036</td><td class="fail">fail</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>Separation is 15×</strong> between a correct BF16 port (0.0152) and the weakest injected
+  fault (0.2341). That margin is what makes a threshold meaningful.</p>
+
+  <h3>Two things we found while calibrating, which we would rather publish than hide</h3>
+
+  <p><strong>Cosine similarity cannot detect scaling errors.</strong> It is scale-invariant by
+  definition — multiply every logprob by 1.01 or by 2.0 and it returns exactly
+  <code>1.0000000000</code> either way. It is widely used for this purpose and it is the wrong
+  instrument. We dropped it.</p>
+
+  <p><strong>Max-absolute-difference over the full vocabulary is dominated by noise.</strong> Under
+  BF16 the largest differences land on tokens with logprobs around −130 — probabilities near
+  1e-57, tokens that will never be sampled. Measured over the full vocabulary a correct BF16 port
+  scores 0.4929; measured over the top 10 tokens it scores 0.0152. A threshold set on the former
+  rejects every correct port.</p>
+
+  <h2>The accuracy delta table</h2>
+
+  <div class="callout pending">
+    <p style="margin:0"><strong>Pending hardware runs.</strong> We will not publish numbers we have
+    not measured. The table below lists the configurations queued for v1; results and raw JSON land
+    here as each completes. The method, thresholds and tooling above are final and already
+    reproducible.</p>
+  </div>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Model</th><th>Reference</th><th>Candidate</th><th>Question it answers</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the noise floor?</td><td class="mut">queued</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
+      <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Model-dependence</td><td class="mut">queued</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>Ascend 910B</td><td>CUDA → CANN</td><td class="mut">v3</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><small>The batch-size row matters as much as the vendor row. Published research shows BF16
+  accuracy varying by up to 9% from GPU count and batch size alone. Without it, a cross-vendor
+  number looks damning when it may be ordinary.</small></p>
+
+  <h2>Method</h2>
+
+  <ul>
+    <li><strong>Black-box, over the wire.</strong> We compare two OpenAI-compatible endpoints. The
+    harness never sees the silicon — only logprobs over HTTP.</li>
+    <li><strong>Statistical, never bitwise.</strong> Bitwise equivalence across vendors is not
+    achievable. Anyone claiming it is misleading you.</li>
+    <li><strong>Worst case, not just mean.</strong> A mean over prompts hides the single bad position
+    that actually matters. We report p50, p99 and max.</li>
+    <li><strong>Full provenance.</strong> Weights SHA256, engine version, driver and toolkit
+    versions, batch size, seed, and the prompt-set hash — published with every number.</li>
+    <li><strong>Raw data published</strong>, not only the summary table.</li>
+  </ul>
+
+  <pre><code>ruitong port Qwen3-8B \
+  --reference nvidia-a100=http://ref:8000 \
+  --candidate amd-mi300x=http://cand:8000 \
+  --output results/qwen3-8b__a100__mi300x.json</code></pre>
+
+  <p><small>Exit codes: <code>0</code> equivalent · <code>1</code> gate failed · <code>2</code> could
+  not run. The third is deliberately distinct — "the port is broken" and "we could not tell" demand
+  opposite responses.</small></p>
+
+  <h2>Who this is for</h2>
+
+  <p>Teams migrating inference between accelerators who need to answer, to someone who will ask:
+  <em>did the model's behaviour change, and by how much?</em> If that question arrives from a risk,
+  audit or procurement function, a spreadsheet from a debugging tool is not an answer.</p>
+
+  <p>The reference table is public and free. If you need it run on <strong>your</strong> model and
+  <strong>your</strong> hardware, with a signed, provenance-bound report, get in touch.</p>
+
+</main>
+
+<!-- ─────────────── 中文 ─────────────── -->
+<main data-lang="zh">
+
+  <h1>同一个模型，不同的加速卡。<br>输出到底变了多少？</h1>
+
+  <p class="lede">这个数字没有人公开发布。我们来做。</p>
+
+  <p>把大模型推理从 NVIDIA 迁移到 AMD、华为昇腾、Intel Gaudi 或 AWS Trainium，输出不会完全一致。浮点运算不满足结合律，不同算子的归约顺序不同，logprob 就会发生偏移。这是预期之内、无法避免的。</p>
+
+  <p>真正关键的问题是<strong>差多少</strong>——以及你看到的差异，究竟是正常的数值噪声，还是一次真实的迁移故障。目前没有任何公开基准可供对照。</p>
+
+  <div class="callout">
+    <p style="margin:0"><strong>空白在哪里。</strong>华为 <code>msprobe</code> 在算子级别做张量比对；MLCommons 为少数基准模型公布 FP32 的 99%／99.9% 门限；而 vLLM 自己的昇腾精度 CI <strong>允许对硬编码数值有 5% 的漂移，且完全没有 GPU 基线列</strong>。它们都让你去跑精度测试，却都没有给出可对照的数值。</p>
+  </div>
+
+  <h2>门限能检出什么——实测</h2>
+
+  <p>在发布精度差异之前，我们必须先证明自己的度量是有效的。我们注入了模拟真实迁移故障的扰动，记录门限是否能检出、以及在多大幅度上能检出。<strong>以下均为实测结果，在 CPU 上数秒即可复现。</strong></p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>场景</th><th>模拟的故障</th><th>top-10 最大 Δlogprob</th><th>概率质量</th><th>判定</th></tr></thead>
+    <tbody>
+      <tr><td>完全相同</td><td>—</td><td class="num">0.0000</td><td class="num">1.000000</td><td class="pass">通过</td></tr>
+      <tr><td>bfloat16 舍入</td><td>正确迁移，精度不同</td><td class="num">0.0152</td><td class="num">0.999877</td><td class="pass">通过</td></tr>
+      <tr><td>logprob 缩放 ×1.05</td><td>softmax／温度参数缺陷</td><td class="num">0.2341</td><td class="num">0.904455</td><td class="fail">失败</td></tr>
+      <tr><td>交换 top-2 token</td><td>算子输出转置</td><td class="num">0.6472</td><td class="num">1.000000</td><td class="fail">失败</td></tr>
+      <tr><td>位置整体偏移 1</td><td>KV cache 索引差一</td><td class="num">0.4476</td><td class="num">1.000000</td><td class="fail">失败</td></tr>
+      <tr><td>12.5% 位置被污染</td><td>间歇性 kernel 故障</td><td class="num">5.0000</td><td class="num">9.472036</td><td class="fail">失败</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>正确的 BF16 迁移（0.0152）与最弱的注入故障（0.2341）之间<strong>相差 15 倍</strong>。正是这个间距，让门限具有实际意义。</p>
+
+  <h3>校准过程中的两个发现——我们宁愿公开，也不愿隐去</h3>
+
+  <p><strong>余弦相似度无法检出缩放类错误。</strong>它在定义上就是尺度不变的——把所有 logprob 乘以 1.01 或乘以 2.0，返回值都精确等于 <code>1.0000000000</code>。这个指标被广泛用于此类比对，但它是错误的工具。我们已弃用。</p>
+
+  <p><strong>全词表的最大绝对差被噪声主导。</strong>在 BF16 下，最大差异出现在 logprob 约 −130 的 token 上——概率约 1e-57，永远不会被采样到。同一次正确的 BF16 迁移，按全词表计算得 0.4929，按 top-10 计算仅为 0.0152。若按前者设定门限，任何正确的迁移都会被判为失败。</p>
+
+  <h2>精度差异表</h2>
+
+  <div class="callout pending">
+    <p style="margin:0"><strong>等待硬件实测。</strong>我们不会发布没有实测过的数字。下表列出 v1 排期的配置；每完成一项，结果与原始 JSON 将在此更新。上方的方法、门限与工具链已定稿，且现在即可复现。</p>
+  </div>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>模型</th><th>参考端</th><th>被测端</th><th>回答的问题</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>噪声基线是多少？</td><td class="mut">排期中</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>跨厂商、同精度</td><td class="mut">排期中</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>仅 batch 变化会影响吗？</td><td class="mut">排期中</td></tr>
+      <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>是否与模型相关</td><td class="mut">排期中</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>昇腾 910B</td><td>CUDA → CANN</td><td class="mut">v3</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><small>batch size 那一行与跨厂商那一行同样重要。已发表的研究显示，仅 GPU 数量与 batch size 的变化，就可使 BF16 精度波动达 9%。缺了这一行，跨厂商的数字会显得触目惊心，而它可能只是常态。</small></p>
+
+  <h2>方法</h2>
+
+  <ul>
+    <li><strong>黑盒、走网络。</strong>我们比对两个 OpenAI 兼容端点。工具本身看不到底层芯片，只看到 HTTP 上的 logprob。</li>
+    <li><strong>统计意义，而非逐位一致。</strong>跨厂商的逐位一致无法实现，声称能做到的都在误导你。</li>
+    <li><strong>看最差值，而不只看均值。</strong>对 prompt 取均值会掩盖真正关键的那一个坏位置。我们同时报告 p50、p99 与最大值。</li>
+    <li><strong>完整溯源。</strong>权重 SHA256、引擎版本、驱动与工具包版本、batch size、随机种子、prompt 集哈希——随每个数字一同公布。</li>
+    <li><strong>公开原始数据</strong>，不只是汇总表。</li>
+  </ul>
+
+  <pre><code>ruitong port Qwen3-8B \
+  --reference nvidia-a100=http://ref:8000 \
+  --candidate amd-mi300x=http://cand:8000 \
+  --output results/qwen3-8b__a100__mi300x.json</code></pre>
+
+  <p><small>退出码：<code>0</code> 等价 · <code>1</code> 未通过门限 · <code>2</code> 无法完成比对。第三种刻意区分开——"迁移有问题"与"我们无法判断"需要完全相反的处理方式。</small></p>
+
+  <h2>适用对象</h2>
+
+  <p>正在做加速卡迁移、并且需要向他人回答以下问题的团队：<em>模型行为是否发生了变化，变化了多少？</em>如果这个问题来自风控、审计或采购部门，一份调试工具导出的表格并不构成答案。</p>
+
+  <p>参考基准表公开且免费。如果需要在<strong>您自己的模型</strong>与<strong>您自己的硬件</strong>上运行，并出具带完整溯源的签署报告，欢迎联系。</p>
+
+</main>
+
+<footer>
+  <p><span data-lang="en" class="on">瑞通 Ruitong — vendor-neutral accelerator equivalence.
+  Method and tooling open; reference data published as measured.</span><span data-lang="zh">瑞通
+  Ruitong — 厂商中立的加速卡等价性验证。方法与工具开放，参考数据实测后发布。</span></p>
+  <p><small>ruitong.io</small></p>
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var langBtn=document.getElementById('lang'), themeBtn=document.getElementById('theme');
+  var zh=false;
+  langBtn.addEventListener('click',function(){
+    zh=!zh;
+    document.querySelectorAll('[data-lang]').forEach(function(el){
+      el.classList.toggle('on', el.getAttribute('data-lang')===(zh?'zh':'en'));
+    });
+    document.documentElement.lang = zh?'zh-CN':'en';
+    langBtn.textContent = zh?'EN':'中文';
+    langBtn.setAttribute('aria-pressed', zh?'true':'false');
+  });
+  var dark=matchMedia('(prefers-color-scheme:dark)').matches;
+  themeBtn.addEventListener('click',function(){
+    dark=!dark;
+    document.documentElement.setAttribute('data-theme', dark?'dark':'light');
+    themeBtn.setAttribute('aria-pressed', dark?'true':'false');
+  });
+})();
+</script>
+</body>
+</html>
