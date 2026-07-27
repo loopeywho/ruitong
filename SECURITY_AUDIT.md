@@ -16,7 +16,9 @@ therefore **launch gates**, not live incidents.
   a parameter tuple. No f-strings, no `.format()`, no string concatenation into SQL.
 - **Error handlers don't leak internals.** The catch-all returns `type(exc).__name__` only, not
   the exception message or traceback.
-- **No secrets in the repo.** `.gitignore` covers `.env`; nothing sensitive is tracked at `4cd7835`.
+- ~~**No secrets in the repo.** `.gitignore` covers `.env`.~~ **← THIS CLAIM WAS FALSE.**
+  `.gitignore` contained **zero** `.env` entries. Nothing sensitive was tracked, so the conclusion
+  happened to hold — but by luck, not by the control cited. See Round 2 · L1. Fixed since.
 
 ---
 
