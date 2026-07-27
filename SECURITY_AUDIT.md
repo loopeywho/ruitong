@@ -125,3 +125,119 @@ root — add a non-root `USER` before deployment).
 **Recommended next:** job-store access control is the highest-value unaudited item. If `job_id` is
 guessable or unscoped, one customer can read another's equivalence report — and the report is the
 product.
+
+---
+
+# Round 2 — 2026-07-27 01:00 · adversarial review
+
+Every exploit below was **executed**, not reasoned about. Reviewed at `fa001b2`.
+
+## ⚠️ Correction to Round 1 — two of my own claims were wrong
+
+**L1 · "No secrets in the repo — `.gitignore` covers `.env`." FALSE.**
+The file contained **zero** `.env` entries. Nothing sensitive was tracked, so the conclusion held —
+but by luck, not by the control I cited. Given H3 below, a `RUITONG_JOB_DB_PATH` pointing inside the
+repo would have committed customer equivalence reports. **Fixed:** added `.env`, `.env.*`, `*.db`,
+`*.sqlite*`.
+
+**M1 · The S1 fix I applied introduced a new defect.**
+`hmac.compare_digest` raises `TypeError` on non-ASCII `str`. Starlette decodes headers as latin-1,
+so any byte ≥ 0x80 in `X-API-Key` turned a 401 into an **unauthenticated 500** — and a non-ASCII
+*configured* key would have 500'd every request, including correct ones. Fails closed, so not a
+bypass, but a free error-rate generator. **Fixed:** compare bytes with `surrogateescape`.
+
+*Lesson, added to `LESSONS.md`: a security fix is a code change like any other and needs its own
+adversarial pass. Mine did not get one.*
+
+## C1 · CRITICAL — one request wedges the whole process ✅ FIXED
+
+`prompts` had `min_length=1` and **no upper bound**. The comparison loop is CPU-bound and contains
+no `await`, so it never yields to the event loop. Measured against live uvicorn:
+
+```
+baseline /v1/health worst latency : 6.3 ms
+during one 400k-prompt POST       : 10.5 s      (returns 202 — attacker pays nothing)
+```
+
+~2 million prompts fit under the 10 MB cap; the rate limiter permits 30 such requests per minute.
+The Dockerfile healthcheck (`--timeout=5s --retries=3`) then kills a container that is merely busy,
+turning the stall into a crash-loop.
+
+**Fixed:** `max_length=64` on the list, 8192 chars per prompt.
+**Still open:** the runner must move off the event loop (`run_in_executor`/`anyio.to_thread`), and
+`JobStore` calls with it. Capping input reduces the blast radius; it does not make the service
+concurrent.
+
+## H1 · HIGH — the job store has no concept of an owner ⬜ open
+
+`CREATE TABLE jobs` has no owner/tenant column. `store.get` is `SELECT * FROM jobs WHERE job_id = ?`
+with no scoping. `config.api_key` is a **single string**, so the system has no caller identity to
+scope by even if it wanted one.
+
+**Good news, precisely:** `job_id = uuid.uuid4().hex` — 122 bits from `os.urandom`. Not enumerable.
+
+**The real exposure:** the job id is a bare bearer capability carried in a URL *path* — it lands in
+Cloudflare logs, proxy logs, `Referer` headers and browser history, with no second factor. On the
+second customer you either share one key (any customer with an id reads any report) or you need
+scoping that does not exist.
+
+**This is the most commercially important finding in the file.** Per `DECISIONS.md` D5 the
+equivalence report *is* the product, and the system currently cannot tell one customer from another.
+
+## H2 · HIGH — rate limiting runs before authentication ⬜ open
+
+Starlette's `add_middleware` inserts at index 0, so the **last** registered runs **first**. Auth is
+registered first and the limiter last, so the limiter is outermost. Rejected requests still execute
+`timestamps.append(now)` before auth ever runs. Executed:
+
+```
+unauth codes: [401, 401, 401, 401, 401, 429, 429, 429]
+legit caller after the flood: 429
+```
+
+Five requests **with no credentials** consumed the entire budget and locked out the paying caller.
+Compounded by S4 — behind Cloudflare every customer shares one bucket.
+
+**Fix:** register the limiter *before* `auth_middleware` so it runs after it, and key the bucket on
+the authenticated principal rather than the IP.
+
+## H3 · HIGH — unbounded jobs, 29× disk amplification, cap function is dead code ⬜ open
+
+`count_active()` exists and is **called from nowhere** — the concurrency cap was written and never
+wired. No `DELETE`, no TTL, no vacuum. Executed: 500 KB of requests produced a **14.5 MB** SQLite
+file (29×); a single job's stored report measured 63 MB.
+
+## M2 · MEDIUM — backend errors relay upstream response bodies verbatim ⬜ open
+
+200 bytes of the upstream vLLM body reach the client through the 502 handler. Demonstrated payload
+included an internal traceback, a model path under `/models/customer-a/`, and an `hf_token=`.
+
+**Currently unreachable** — `VllmHttpBackend` is not yet wired to any route. **It becomes live the
+moment it is**, which is the next step in `deploy/README.md`. Fix before wiring, not after.
+
+## M3–M5 · MEDIUM ⬜ open
+
+- **M3** `asyncio.create_task(_run_job())` — reference discarded, so a suspending task can be
+  garbage-collected mid-flight. No timeout, no shutdown drain, no reaper. A `SIGKILL` leaves a row
+  stuck in `running` forever.
+- **M4** in-memory job store is the default; with `--workers 4`, **18 of 20** valid jobs returned
+  404 on at least one poll. File-backed needs WAL and a `busy_timeout`.
+- **M5** Dockerfile: runs as **root**; `uv pip install .` reads `pyproject.toml` (`>=` floors), so
+  **`uv.lock` is never used** and builds are not reproducible; `uv:latest` is a mutable tag;
+  `urlopen(...) or exit(1)` is dead code; no `--start-period`.
+
+## Confirmed CLEAN (tested, not assumed)
+
+`job_id` entropy (uuid4, not enumerable) · SQL injection (re-verified parameterised) · rate-limiter
+async race (**no race** — the critical section contains no `await`) · SQLite thread safety
+(`RLock` held throughout, safe in-process) · **SSRF — none** (no request field reaches a URL;
+`follow_redirects=False`, `verify=True`) · path-based auth bypass (case, trailing slash, `//`,
+`..`, `#`, `%23` — all fail closed) · dangerous sinks (no `eval`/`subprocess`/`pickle`) ·
+**dependency CVEs — none substantiated** (h11 0.16.0 is post-fix; the risk is that the Dockerfile
+ignores the lockfile, not the lockfile itself) · catch-all handler (leaks nothing).
+
+## Launch-gate order
+
+**C1 ✅ → H2 → H3 → M1 ✅** are pure availability, exploitable today from one laptop, cheap to fix.
+**H1** needs a design decision (per-customer keys) and matters most commercially. **M2 must land
+before `VllmHttpBackend` is wired to a route.**
