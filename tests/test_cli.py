@@ -45,33 +45,34 @@ class TestCLIBasic:
         assert "model" in r.stdout.lower() or "target" in r.stdout.lower()
         assert "cuda" in r.stdout.lower() or "ascend" in r.stdout.lower()
 
-    def test_port_help_mentions_auto(self) -> None:
-        """Help text mentions auto mode."""
+    def test_port_help_mentions_cuda_or_ascend(self) -> None:
+        """Help text mentions --target choices."""
         r = _run_ruitong("port", "--help")
-        assert "auto" in r.stdout.lower()
+        assert "ascend" in r.stdout.lower() or "cuda" in r.stdout.lower()
 
 
 class TestCLIRunning:
     def test_target_cuda_produces_report(self, tmp_path) -> None:
-        """ruitong port <model> --target cuda writes report.json."""
+        """ruitong port <model> --target cuda writes report.json (synthetic → exit 1)."""
         out_file = tmp_path / "report_cuda.json"
         r = _run_ruitong(
             "port", "Qwen3-8B", "--target", "cuda", "--output", str(out_file)
         )
-        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert r.returncode == 1, f"stderr: {r.stderr}"
         assert out_file.exists()
         data = json.loads(out_file.read_text())
         assert data["model"] == "Qwen3-8B"
-        assert data["passed"] is True
+        assert data["passed"] is False  # synthetic run — no endpoints
+        assert data["synthetic"] is True
         assert data["total_prompts"] > 0
 
     def test_target_ascend_produces_report(self, tmp_path) -> None:
-        """ruitong port <model> --target ascend writes report.json."""
+        """ruitong port <model> --target ascend writes report.json (synthetic → exit 1)."""
         out_file = tmp_path / "report_ascend.json"
         r = _run_ruitong(
             "port", "Qwen3-8B", "--target", "ascend", "--output", str(out_file)
         )
-        assert r.returncode == 0, f"stderr: {r.stderr}"
+        assert r.returncode == 1, f"stderr: {r.stderr}"
         assert out_file.exists()
         data = json.loads(out_file.read_text())
         assert data["model"] == "Qwen3-8B"
@@ -84,9 +85,9 @@ class TestCLIRunning:
         assert "cuda" in r.stdout.lower() or "ascend" in r.stdout.lower()
 
     def test_stdout_prints_summary(self) -> None:
-        """CLI prints a human-readable summary to stdout."""
+        """CLI prints a human-readable summary to stdout (synthetic → exit 1)."""
         r = _run_ruitong("port", "Qwen3-8B", "--target", "cuda")
-        assert r.returncode == 0
+        assert r.returncode == 1
         assert "equivalence" in r.stdout.lower() or "report" in r.stdout.lower()
         assert "passed" in r.stdout.lower()
 
@@ -98,12 +99,12 @@ class TestCLIRunning:
         assert "cuda" in combined or "ascend" in combined or "auto" in combined
 
     def test_report_has_thresholds(self, tmp_path) -> None:
-        """Report JSON includes thresholds_used section."""
+        """Report JSON includes thresholds_used section (synthetic → exit 1)."""
         out_file = tmp_path / "report_thresh.json"
         r = _run_ruitong(
             "port", "Qwen3-8B", "--target", "cuda", "--output", str(out_file)
         )
-        assert r.returncode == 0
+        assert r.returncode == 1
         data = json.loads(out_file.read_text())
         assert "thresholds_used" in data
         tu = data["thresholds_used"]
@@ -115,12 +116,12 @@ class TestCLIRunning:
 
 class TestCLIEdgeCases:
     def test_per_prompt_results_in_report(self, tmp_path) -> None:
-        """Each prompt has a per_prompt_results entry."""
+        """Each prompt has a per_prompt_results entry (synthetic → exit 1)."""
         out_file = tmp_path / "report_pp.json"
         r = _run_ruitong(
             "port", "Qwen3-8B", "--target", "cuda", "--output", str(out_file)
         )
-        assert r.returncode == 0
+        assert r.returncode == 1
         data = json.loads(out_file.read_text())
         assert len(data["per_prompt_results"]) >= 1
         for pp in data["per_prompt_results"]:
@@ -128,11 +129,11 @@ class TestCLIEdgeCases:
             assert "cosine_sim" in pp or "cuda_logprobs" in pp
 
     def test_warnings_list_present(self, tmp_path) -> None:
-        """Report has a warnings list."""
+        """Report has a warnings list (synthetic → exit 1)."""
         out_file = tmp_path / "report_warn.json"
         r = _run_ruitong(
             "port", "Qwen3-8B", "--target", "cuda", "--output", str(out_file)
         )
-        assert r.returncode == 0
+        assert r.returncode == 1
         data = json.loads(out_file.read_text())
         assert isinstance(data["warnings"], list)

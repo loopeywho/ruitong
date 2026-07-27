@@ -6,6 +6,7 @@ When batched, metrics are computed per-position and averaged.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 
@@ -123,3 +124,64 @@ def top_k_set_agreement(
         union = len(top_a | top_b)
         jaccards.append(intersection / union if union > 0 else 0.0)
     return sum(jaccards) / len(jaccards)
+
+
+# ── Calibrated metrics (see CALIBRATION.md, DECISIONS.md D7) ──────────
+#
+# `max_absolute_difference` above is measured, not guessed, to be unusable as a
+# gate: BF16 rounding alone scores 0.4929 against a 0.05 threshold, because the
+# statistic is dominated by vocabulary-tail logprobs around -130 (probability
+# ~1e-57, never sampled). Separation from a genuine fault is 2.2%.
+#
+# `cosine_similarity` is likewise unusable: it is scale-invariant by
+# definition, so scaling every logprob by 1.01 or by 2.0 both score exactly
+# 1.0. A softmax/temperature bug is mathematically invisible to it.
+#
+# The two below replace them. Measured separation: 15x.
+
+
+def top_k_max_abs_diff(
+    tensor_a: list[float] | list[list[float]],
+    tensor_b: list[float] | list[list[float]],
+    k: int = 10,
+) -> float:
+    """Worst absolute logprob difference across the reference's top-k tokens.
+
+    Restricting to the top-k confines the measurement to the region that
+    determines model behaviour. Ranking is taken from `tensor_a` (the
+    reference) so the comparison is anchored, not co-defined by the candidate.
+
+    Returns a true maximum — not a mean of maxima. The worst position is the
+    one a customer's decision actually hinges on.
+
+    Measured: bfloat16 rounding 0.0152 · weakest injected fault 0.2341.
+    """
+    a, b = _ensure_lists(tensor_a, tensor_b)
+    worst = 0.0
+    for row_a, row_b in zip(a, b):
+        if not row_a:
+            continue
+        ranked = sorted(range(len(row_a)), key=lambda i: -row_a[i])[:k]
+        worst = max(worst, max(abs(row_a[i] - row_b[i]) for i in ranked))
+    return worst
+
+
+def probability_mass(tensor: list[float] | list[list[float]]) -> float:
+    """Mean total probability mass, `sum(exp(logprob))`, per position.
+
+    A valid log-softmax row sums to 1.0. Deviation indicates output that was
+    rescaled, truncated, or never normalised — the class of fault the top-k
+    check cannot see, since it can leave the ranking untouched.
+
+    Measured: correct output 0.999877 · a x1.05 scaling fault 0.904455.
+    """
+    rows, _ = _ensure_lists(tensor, tensor)
+    totals: list[float] = []
+    for row in rows:
+        total = 0.0
+        for value in row:
+            # Guard against overflow on corrupt input: a logprob above 0 is
+            # already invalid, and exp() of a large positive would raise.
+            total += math.exp(value) if value < 64.0 else math.exp(64.0)
+        totals.append(total)
+    return sum(totals) / len(totals)
