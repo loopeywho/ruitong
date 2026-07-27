@@ -364,3 +364,122 @@ class TestEquivalenceRunner:
         runner = EquivalenceRunner(cuda, ascend)
         assert runner.backend_a_name == "cuda"
         assert runner.backend_b_name == "ascend"
+
+
+# ---------------------------------------------------------------------------
+# Cache-state control (DECISIONS.md D9)
+# ---------------------------------------------------------------------------
+
+
+class _CountingBackend:
+    """Backend that records every request and replays a fixed response.
+
+    Deliberately not a Mock: the point is to assert the *number* of calls the
+    runner makes per prompt, which is a behavioural contract, not an
+    implementation detail.
+    """
+
+    def __init__(self, name: str, responses: list) -> None:
+        self.name = name
+        self.calls: list[str] = []
+        self._responses = responses
+
+    async def health(self):  # pragma: no cover - not exercised
+        raise NotImplementedError
+
+    async def list_models(self):  # pragma: no cover - not exercised
+        raise NotImplementedError
+
+    async def chat(self, req):
+        self.calls.append(req.messages[-1].content)
+        return self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
+
+    async def stream(self, req):  # pragma: no cover - not exercised
+        raise NotImplementedError
+        yield  # type: ignore[unreachable]
+
+
+def _response_with_logprobs(backend: str, logprob: float):
+    from ruitong.schemas import (
+        ChatResponse,
+        Choice,
+        ChoiceLogprobs,
+        LogprobEntry,
+        Message,
+        TopLogprob,
+        Usage,
+    )
+
+    return ChatResponse(
+        id="x",
+        model="m",
+        backend=backend,
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        choices=[
+            Choice(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="stop",
+                logprobs=ChoiceLogprobs(
+                    content=[
+                        LogprobEntry(
+                            token="hi",
+                            logprob=logprob,
+                            top_logprobs=[
+                                TopLogprob(token="hi", logprob=logprob),
+                                TopLogprob(token="yo", logprob=logprob - 5.0),
+                            ],
+                        )
+                    ]
+                ),
+            )
+        ],
+    )
+
+
+class TestWarmUpPass:
+    """The runner must warm both backends before the measured call.
+
+    A prompt's first execution takes no prefix-cache hits and returns
+    different logprobs from every later one — measured at 8.65e-02 on an A40,
+    larger than every fault the gate must catch. If this guarantee is ever
+    dropped, whichever backend happens to be colder is reported as broken.
+    """
+
+    async def test_each_backend_called_twice_per_prompt(self) -> None:
+        from ruitong.equivalence.runner import EquivalenceRunner
+
+        resp_a = _response_with_logprobs("a", -0.1)
+        resp_b = _response_with_logprobs("b", -0.1)
+        backend_a = _CountingBackend("a", [resp_a])
+        backend_b = _CountingBackend("b", [resp_b])
+
+        runner = EquivalenceRunner(backend_a, backend_b)
+        await runner.run("m", ["prompt one", "prompt two"])
+
+        # 2 prompts x (1 warm-up + 1 measured) = 4 calls per backend
+        assert len(backend_a.calls) == 4
+        assert len(backend_b.calls) == 4
+        assert backend_a.calls == [
+            "prompt one", "prompt one", "prompt two", "prompt two",
+        ]
+        assert backend_a.calls == backend_b.calls
+
+    async def test_warm_up_failure_does_not_abort_the_comparison(self) -> None:
+        """A failed warm-up must not be reported as the defect — the measured
+        call that follows carries the real error, if there is one."""
+        from ruitong.equivalence.runner import EquivalenceRunner
+
+        class FailsFirst(_CountingBackend):
+            async def chat(self, req):
+                self.calls.append(req.messages[-1].content)
+                if len(self.calls) == 1:
+                    raise RuntimeError("warm-up boom")
+                return self._responses[0]
+
+        backend_a = FailsFirst("a", [_response_with_logprobs("a", -0.1)])
+        backend_b = _CountingBackend("b", [_response_with_logprobs("b", -0.1)])
+
+        report = await EquivalenceRunner(backend_a, backend_b).run("m", ["p"])
+        assert report.compared_prompts == 1
+        assert report.errored_prompts == 0

@@ -1,0 +1,301 @@
+{
+  "model": "Qwen/Qwen3-8B",
+  "endpoint_host": "vjqkdwuzls8hnf-8000.proxy.runpod.net",
+  "max_tokens": 48,
+  "top_k_requested": 20,
+  "prompts": 8,
+  "conditions": {
+    "repeat": {
+      "prompts_compared": 8,
+      "token_sequences_identical": 6,
+      "texts_identical": 6,
+      "worst_topk_max_abs_diff": 0.875,
+      "median_topk_max_abs_diff": 0.625,
+      "worst_probability_mass_delta": 3.3809062134348977e-06,
+      "worst_top1_agreement": 1.0,
+      "worst_top5_set_agreement": 0.9791666666666665,
+      "per_prompt": [
+        {
+          "positions_compared": 8,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5625,
+          "probability_mass_delta": 6.6021066391641625e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "What is the capital of France? Answer in one sentence."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.6721153259277344,
+          "probability_mass_delta": 8.090115244385743e-10,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9930555555555555,
+          "prompt": "Explain what a transformer model is, briefly."
+        },
+        {
+          "positions_compared": 0,
+          "token_sequence_identical": false,
+          "first_divergent_position": 0,
+          "text_identical": false,
+          "prompt": "Write one line of Python that reverses a string."
+        },
+        {
+          "positions_compared": 35,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5,
+          "probability_mass_delta": 9.654943844417119e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9904761904761904,
+          "prompt": "Name three primary colours."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.625,
+          "probability_mass_delta": 2.928743902952391e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9791666666666665,
+          "prompt": "What is 17 multiplied by 23?"
+        },
+        {
+          "positions_compared": 41,
+          "token_sequence_identical": false,
+          "first_divergent_position": 41,
+          "text_identical": false,
+          "topk_max_abs_diff": 0.875,
+          "probability_mass_delta": 1.1473249239557504e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Summarise the water cycle in two sentences."
+        },
+        {
+          "positions_compared": 4,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.25,
+          "probability_mass_delta": 2.1998392329969363e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Translate 'good morning' into Mandarin Chinese."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.7235655784606934,
+          "probability_mass_delta": 3.3809062134348977e-06,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9861111111111112,
+          "prompt": "What does the acronym GPU stand for?"
+        }
+      ]
+    },
+    "batched": {
+      "prompts_compared": 8,
+      "token_sequences_identical": 6,
+      "texts_identical": 6,
+      "worst_topk_max_abs_diff": 0.625,
+      "median_topk_max_abs_diff": 0.5,
+      "worst_probability_mass_delta": 4.95042706538662e-06,
+      "worst_top1_agreement": 1.0,
+      "worst_top5_set_agreement": 0.9523809523809522,
+      "per_prompt": [
+        {
+          "positions_compared": 8,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.625,
+          "probability_mass_delta": 2.9779702037657785e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "What is the capital of France? Answer in one sentence."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5636634826660156,
+          "probability_mass_delta": 2.2591210013800378e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9861111111111112,
+          "prompt": "Explain what a transformer model is, briefly."
+        },
+        {
+          "positions_compared": 0,
+          "token_sequence_identical": false,
+          "first_divergent_position": 0,
+          "text_identical": false,
+          "prompt": "Write one line of Python that reverses a string."
+        },
+        {
+          "positions_compared": 35,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.43760716915130615,
+          "probability_mass_delta": 8.664578610151352e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9523809523809522,
+          "prompt": "Name three primary colours."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5,
+          "probability_mass_delta": 3.31202286707466e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9652777777777776,
+          "prompt": "What is 17 multiplied by 23?"
+        },
+        {
+          "positions_compared": 41,
+          "token_sequence_identical": false,
+          "first_divergent_position": 41,
+          "text_identical": false,
+          "topk_max_abs_diff": 0.5,
+          "probability_mass_delta": 7.660836631728785e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Summarise the water cycle in two sentences."
+        },
+        {
+          "positions_compared": 4,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.4828624725341797,
+          "probability_mass_delta": 8.010039392880586e-07,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Translate 'good morning' into Mandarin Chinese."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.6249179840087891,
+          "probability_mass_delta": 4.95042706538662e-06,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9861111111111112,
+          "prompt": "What does the acronym GPU stand for?"
+        }
+      ]
+    },
+    "reordered": {
+      "prompts_compared": 8,
+      "token_sequences_identical": 8,
+      "texts_identical": 8,
+      "worst_topk_max_abs_diff": 0.8748912811279297,
+      "median_topk_max_abs_diff": 0.49999475479125977,
+      "worst_probability_mass_delta": 2.6846937898339363e-06,
+      "worst_top1_agreement": 1.0,
+      "worst_top5_set_agreement": 0.972222222222222,
+      "per_prompt": [
+        {
+          "positions_compared": 8,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.25,
+          "probability_mass_delta": 4.1222512070504536e-09,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "What is the capital of France? Answer in one sentence."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5625,
+          "probability_mass_delta": 2.6842917888458828e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9791666666666665,
+          "prompt": "Explain what a transformer model is, briefly."
+        },
+        {
+          "positions_compared": 5,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.28315067291259766,
+          "probability_mass_delta": 2.07959455622575e-06,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Write one line of Python that reverses a string."
+        },
+        {
+          "positions_compared": 35,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5,
+          "probability_mass_delta": 9.836697012488571e-10,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9904761904761904,
+          "prompt": "Name three primary colours."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.49998950958251953,
+          "probability_mass_delta": 1.6286864967796078e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.972222222222222,
+          "prompt": "What is 17 multiplied by 23?"
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.5,
+          "probability_mass_delta": 1.0609679357287405e-08,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Summarise the water cycle in two sentences."
+        },
+        {
+          "positions_compared": 4,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.2499980926513672,
+          "probability_mass_delta": 1.9856950672636486e-07,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 1.0,
+          "prompt": "Translate 'good morning' into Mandarin Chinese."
+        },
+        {
+          "positions_compared": 48,
+          "token_sequence_identical": true,
+          "first_divergent_position": null,
+          "text_identical": true,
+          "topk_max_abs_diff": 0.8748912811279297,
+          "probability_mass_delta": 2.6846937898339363e-06,
+          "top1_agreement": 1.0,
+          "top5_set_agreement": 0.9791666666666666,
+          "prompt": "What does the acronym GPU stand for?"
+        }
+      ]
+    }
+  }
+}

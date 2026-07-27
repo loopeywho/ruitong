@@ -16,20 +16,55 @@ from ..errors import BackendError, BackendUnavailable
 from ..schemas import ChatChunk, ChatRequest, ChatResponse, HealthStatus, ModelInfo
 
 
+def _model_entries(body: object) -> list:
+    """Extract the model list from a /v1/models response.
+
+    A real OpenAI-compatible server returns an *envelope*
+    ``{"object": "list", "data": [{"id": ...}, ...]}`` — not a bare list.
+    The previous code took ``response.json()``, found it was not a list, and
+    wrapped the envelope itself in one, so every model id resolved to ``""``
+    and ``models_served`` counted the envelope's two keys.
+
+    Verified against vLLM 0.x serving Qwen/Qwen3-8B on 2026-07-27. This is the
+    same failure as the logprobs wire-format bug: a fixture returned a shape
+    no real server emits, and every test agreed with the fixture.
+    """
+    if isinstance(body, dict):
+        data = body.get("data")
+        return list(data) if isinstance(data, list) else [body]
+    if isinstance(body, list):
+        return body
+    return [body]
+
+
 class VllmHttpBackend:
     """HTTP backend for vLLM-compatible servers (CUDA and Ascend)."""
 
     name: str
 
     def __init__(
-        self, name: str, base_url: str, timeout: float = 60.0
+        self,
+        name: str,
+        base_url: str,
+        timeout: float = 60.0,
+        api_key: str | None = None,
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_key = api_key
 
     def _new_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=self.timeout)
+        """Client carrying bearer auth when the endpoint requires it.
+
+        Every serious endpoint is authenticated — a RunPod pod, a customer's
+        cluster, DashScope. Without this the harness can only ever talk to an
+        open port, which is not where a real port lives.
+        """
+        headers = (
+            {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        )
+        return httpx.AsyncClient(timeout=self.timeout, headers=headers)
 
     async def _request(
         self, method: str, url: str, json_data: dict | None = None
@@ -73,9 +108,10 @@ class VllmHttpBackend:
                 return HealthStatus(
                     healthy=False, backend=self.name, models_served=0
                 )
-            models = resp.json()
             return HealthStatus(
-                healthy=True, backend=self.name, models_served=len(models)
+                healthy=True,
+                backend=self.name,
+                models_served=len(_model_entries(resp.json())),
             )
         except Exception:
             return HealthStatus(healthy=False, backend=self.name, models_served=0)
@@ -89,11 +125,12 @@ class VllmHttpBackend:
             raise BackendError(
                 self.name, cause=exc, message="Malformed response body"
             ) from exc
-        if not isinstance(ids, list):
-            ids = [ids]
         return [
-            ModelInfo(id=mid if isinstance(mid, str) else mid.get("id", ""), backend=self.name)
-            for mid in ids
+            ModelInfo(
+                id=entry if isinstance(entry, str) else entry.get("id", ""),
+                backend=self.name,
+            )
+            for entry in _model_entries(ids)
         ]
 
     async def chat(self, req: ChatRequest) -> ChatResponse:

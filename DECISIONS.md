@@ -122,3 +122,84 @@ arbitrary backend names.
 Self-comparison is refused on this path too: identical reference and candidate names exit 2.
 
 Verified: 194 passed, mypy clean.
+
+---
+
+## D9 — Real hardware retires the D7 gate; cache state becomes a controlled variable
+
+**2026-07-27 · first measurement on a real GPU** (NVIDIA A40, `Qwen/Qwen3-8B`,
+RunPod, ~$0.44/hr). Full numbers and method in `CALIBRATION.md`.
+
+D7 chose `top_k_max_abs_diff` as the primary gate, calibrated against synthetic
+logprobs because no hardware was available. Real model output invalidated that
+choice in three ways at once. Every finding below came from *running* code
+against a real server; none was visible from reading it, and 202 green tests
+agreed with the synthetic fixtures throughout.
+
+### 1. The gate rejected the reference model compared with itself
+
+On real data, two **correct** executions of the same prompt on the same GPU —
+differing only in prefix-cache state — scored up to **1.25**, against a
+threshold of **0.05**. The weakest genuine fault scores **0.406**. Noise and
+faults overlap, so no threshold exists that separates them.
+
+Two independent causes, both invisible in synthetic data:
+
+- **Ranks, not tokens.** Tail tokens are near-tied, so a negligible
+  perturbation swaps their order and the metric compares two unrelated tokens.
+  Observed: rank 3 held `'高'` on one side and `' like'` on the other.
+- **Log space, not probability space.** The top-10 of an 8B model spans
+  logprob 0 to −29. A 0.5 shift at −26 (p ≈ 3e-12) scores the same as 0.5 at
+  the argmax, which flips the output.
+
+**Decision:** `top_k_max_abs_diff` is demoted to reported-only, joining
+`cosine_similarity` and full-vocab `max_absolute_difference`. Three metrics
+have now been retired by measurement rather than opinion.
+
+### 2. The replacement: `token_matched_prob_diff`
+
+Matches tokens **by identity**, compares **probabilities**. Calibrated at
+**2.2e-03** — the geometric mean of the measured noise ceiling (bf16 rounding,
+1.293e-03) and the weakest fault (1% temperature error, 3.660e-03).
+
+The 1.7× margin is thin, and is published rather than hidden: a temperature
+error below ~1% is at or past the detection limit.
+
+Implementation trap worth remembering: **token strings are not unique within a
+row.** One position in the corpus held *nine distinct token ids all decoding to
+`""`*. Keying a dict on the string kept only the last, and the metric scored
+**0.67 comparing a tensor with itself**. Repeated strings are paired by order
+of appearance.
+
+### 3. Prefix-cache state is now controlled, not tolerated
+
+A prompt's first execution takes **zero** cache hits and returns different
+logprobs from every later one. Proven from vLLM's own counters: cold call +0
+hits, warm call +16. The resulting difference reaches **8.65e-02** — 24× the
+weakest fault — while leaving the output text identical.
+
+A gate wide enough to tolerate that would pass a demoted argmax. So the runner
+now warms **both** backends on every prompt and discards the result before
+measuring (`EquivalenceRunner._warm`).
+
+**This is a methodological differentiator, not just a bug fix.** A naive
+CUDA-vs-Ascend benchmark that does not control cache state measures the cache,
+not the silicon — and whichever side happens to be colder is reported as
+broken. Once warm, the reference contributes *zero* noise (bit-exact, 16/16
+prompts), which is what makes an attribution claim possible at all.
+
+### Corpus over live calls
+
+`corpora/cuda_a40_qwen3_8b.json` (333 KB, committed) is captured once and
+replayed offline. GPU time is the scarce resource; analysis is free. The
+sensitivity suite now runs against real model output instead of fixtures — the
+previous suite passed while the gate it guarded was rejecting correct ports.
+
+### What this does not establish
+
+One GPU, one model, one vendor. bf16 rounding is a *proxy* for two hardware
+kernels disagreeing. No Ascend hardware has been touched, so the CUDA↔Ascend
+claim remains unevidenced.
+
+Verified: 212 passed, mypy clean, sensitivity suite mutation-tested (removing
+the warm-up pass fails 2 tests; widening the threshold to 0.1 fails 4).

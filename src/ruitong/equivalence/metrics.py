@@ -203,6 +203,24 @@ def probability_mass(tensor: list[float] | list[list[float]]) -> float:
 # which `ChoiceLogprobs.top_k_tokens()` now carries off the wire.
 
 
+def _reject_flat_token_rows(rows: object, argument: str) -> None:
+    """Reject `list[str]` where `list[list[str]]` is required.
+
+    The two shapes are indistinguishable by duck typing — a `str` is itself a
+    sequence of `str` — so `rows[0][0]` silently yields a *character* and the
+    metric returns a plausible wrong number instead of failing. Caught when a
+    self-comparison scored 0.984 rather than 1.0; the caller had passed
+    already-extracted rank-0 tokens.
+    """
+    if isinstance(rows, (list, tuple)) and rows and isinstance(rows[0], str):
+        raise TypeError(
+            f"{argument} must be list[list[str]] (one row of top-k tokens per "
+            f"position), got list[str]. Pass the full top-k rows, not the "
+            f"rank-0 tokens — indexing a str yields a character and the "
+            f"comparison silently degrades to first-letter matching."
+        )
+
+
 def top1_token_agreement(
     tokens_a: list[list[str]], tokens_b: list[list[str]]
 ) -> float:
@@ -211,6 +229,8 @@ def top1_token_agreement(
         raise ValueError("Inputs must not be empty")
     if len(tokens_a) != len(tokens_b):
         raise ValueError(f"Length mismatch: {len(tokens_a)} vs {len(tokens_b)}")
+    _reject_flat_token_rows(tokens_a, "tokens_a")
+    _reject_flat_token_rows(tokens_b, "tokens_b")
 
     matches = 0
     for row_a, row_b in zip(tokens_a, tokens_b):
@@ -232,6 +252,8 @@ def topk_token_set_agreement(
         raise ValueError("Inputs must not be empty")
     if len(tokens_a) != len(tokens_b):
         raise ValueError(f"Length mismatch: {len(tokens_a)} vs {len(tokens_b)}")
+    _reject_flat_token_rows(tokens_a, "tokens_a")
+    _reject_flat_token_rows(tokens_b, "tokens_b")
 
     scores: list[float] = []
     for row_a, row_b in zip(tokens_a, tokens_b):
@@ -239,3 +261,79 @@ def topk_token_set_agreement(
         union = len(set_a | set_b)
         scores.append(len(set_a & set_b) / union if union else 0.0)
     return sum(scores) / len(scores)
+
+
+def token_matched_prob_diff(
+    tokens_a: list[list[str]],
+    logprobs_a: list[list[float]],
+    tokens_b: list[list[str]],
+    logprobs_b: list[list[float]],
+    k: int = 10,
+) -> float:
+    """Worst probability shift for any of the reference's top-k tokens.
+
+    This replaces `top_k_max_abs_diff` as the primary gate. Two defects in
+    that metric were exposed by real hardware (Qwen3-8B on an NVIDIA A40,
+    2026-07-27) and neither was visible in synthetic calibration:
+
+    1. **It compares by rank, so it compares different tokens.** In the tail
+       of the top-k many tokens are near-tied, so a negligible perturbation
+       swaps their order. Rank 3 then holds `'高'` on one side and `' like'`
+       on the other, and the metric reports the gap between two unrelated
+       tokens as disagreement. Matching by token identity removes this
+       entirely.
+
+    2. **Log space gives equal weight to irrelevant tokens.** For an 8B model
+       the top-10 spans logprob 0 down to about -29. A 0.5 shift at -26 is a
+       probability change of 3e-12 — it cannot alter any behaviour — yet it
+       scores identically to a 0.5 shift at the argmax, which flips output.
+       Comparing probabilities weights each token by how much it can matter.
+
+    Together these produced a same-server noise reading of 0.5 to 28.6
+    against a threshold of 0.05: the old gate rejected the reference model
+    compared with *itself*.
+
+    A reference token absent from the candidate's top-k is treated as
+    probability zero. That is the correct reading — the candidate ranked it
+    outside k — and it is self-scaling: a dropped token at p=1e-12 registers
+    1e-12, while a dropped token at p=0.3 registers 0.3.
+
+    **Token strings are not unique within a row.** The wire format carries the
+    *decoded string*, and many distinct token IDs decode to the same one — in
+    the captured A40 corpus a single position held nine separate ids all
+    decoding to `""`. Building a plain `{token: logprob}` dict silently keeps
+    only the last, so rank 1 gets compared against rank 17 and an identical
+    tensor scores 0.67 against itself. Repeated strings are therefore paired
+    by order of appearance: the n-th `""` on one side matches the n-th `""`
+    on the other.
+
+    Returns a value in [0, 1] directly readable as "no token's probability
+    moved by more than this".
+    """
+    worst = 0.0
+    for row_tokens_a, row_logs_a, row_tokens_b, row_logs_b in zip(
+        tokens_a, logprobs_a, tokens_b, logprobs_b
+    ):
+        if not row_tokens_a:
+            continue
+
+        # token -> logprobs in the order the candidate listed them
+        occurrences_b: dict[str, list[float]] = {}
+        for token, logprob in zip(row_tokens_b, row_logs_b):
+            occurrences_b.setdefault(token, []).append(logprob)
+
+        seen: dict[str, int] = {}
+        limit = min(len(row_tokens_a), len(row_logs_a))
+        for index in range(limit):
+            token = row_tokens_a[index]
+            nth = seen.get(token, 0)
+            seen[token] = nth + 1
+            if index >= k:
+                continue  # still counted above, so pairing stays aligned
+            prob_a = math.exp(min(row_logs_a[index], 0.0))
+            bucket = occurrences_b.get(token, ())
+            prob_b = (
+                math.exp(min(bucket[nth], 0.0)) if nth < len(bucket) else 0.0
+            )
+            worst = max(worst, abs(prob_a - prob_b))
+    return worst

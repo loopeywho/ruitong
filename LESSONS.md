@@ -251,3 +251,88 @@ only valid for the data shape it was measured on.
 scaling fault shifts one side relative to the other and needs no full distribution. Measured
 afterwards: 0.00048 for an equivalent BF16 port vs 0.0952 for a x1.05 scaling fault. **Always
 calibrate on the exact shape the wire delivers.**
+
+---
+
+# Round 5 — first contact with real hardware (2026-07-27)
+
+Notes for Qwen / Kimi / KIMI-coder. Every entry below is a mistake or blind
+spot that **only a real GPU exposed**, after 202 green tests and clean mypy.
+Log your own the same way — the point of this file is that the next model does
+not repeat what the last one learned.
+
+## [2026-07-27] claude — Synthetic fixtures agreed with themselves for five rounds
+**What:** the gate was calibrated on synthetic logprobs because no GPU was
+available. On a real A40 the primary metric scored **1.25 between two correct
+executions** against its own **0.05** threshold — it rejected the reference
+model compared with itself. The weakest real fault scores 0.406, so noise and
+faults *overlapped*: no threshold could have worked.
+**Why the tests missed it:** synthetic logprobs had a convenient distribution.
+A real 8B model's top-10 spans logprob 0 to −29; the synthetic one did not.
+Every test agreed with the fixture, and the fixture was wrong.
+**Rule:** a threshold is only valid for the data distribution it was measured
+on. **Synthetic calibration is a placeholder, never a result.** Say so in the
+doc, and re-measure before anyone quotes the number.
+
+## [2026-07-27] claude — Two token ids can decode to the same string
+**What:** wrote `dict(zip(tokens, logprobs))` to look up a token's logprob.
+One position in the real corpus contained **nine distinct token ids all
+decoding to `""`**. The dict kept only the last, so rank 1 was compared against
+rank 17 and the metric scored **0.67 comparing a tensor with itself**.
+**Why wrong:** the OpenAI wire format carries the *decoded string*, not the
+token id. Strings are not unique keys.
+**Rule:** never key on a decoded token string. Pair repeated strings by order
+of appearance, and **always test a comparison metric for reflexivity** —
+`metric(x, x)` must be exactly 0. That one assertion catches a whole class of
+bug in one line, and it is the first test I should have written.
+
+## [2026-07-27] claude — `list[str]` and `list[list[str]]` are indistinguishable at runtime
+**What:** passed already-extracted rank-0 tokens to a function expecting full
+top-k rows. `row[0]` then yielded a *character* instead of a token, and the
+metric silently returned 0.984 instead of 1.0 — plausible, and wrong.
+**Why wrong:** a `str` is itself a sequence of `str`, so duck typing cannot
+tell the two shapes apart, and no exception is raised.
+**Rule:** when a function takes nested string sequences, **reject the flat
+shape explicitly** (`isinstance(rows[0], str) -> raise`). Type hints do not run
+at runtime. A silently-wrong number is worse than a crash.
+
+## [2026-07-27] claude — Asserted the cause before measuring it
+**What:** saw a 404 from the endpoint and told Boss the proxy was auth-gating
+it. Then saw `{"error":"Unauthorized"}` from *inside* the pod — it was vLLM's
+own API key all along. Later saw a 28.56 difference and was about to build a
+theory on it; the actual worst case across three fresh prompts was ~0.5, and
+the 28.56 was a single deep-rank token swap.
+**Why wrong:** both times I generalised from one observation to a mechanism.
+**Rule:** before naming a cause, get a second measurement that *discriminates*
+between the candidate causes. For the cache finding I did this properly —
+read vLLM's `prefix_cache_hits_total` across a cold and a warm call (+0 then
++16) — and that turned a plausible story into a proven one. Do that first, not
+after being wrong once.
+
+## [2026-07-27] claude — `list_models` had never parsed a real response
+**What:** `response.json()` returns the OpenAI envelope
+`{"object":"list","data":[...]}`, not a bare list. The code checked
+`isinstance(ids, list)`, found `False`, and wrapped the *envelope* in a list —
+so every model id resolved to `""` and `models_served` counted the envelope's
+two keys.
+**Why the tests missed it:** every fixture returned a bare list, which no
+OpenAI-compatible server has ever emitted. Same root cause as the logprobs
+wire-format bug in round 4.
+**Rule:** **pin at least one test to a payload captured verbatim from a real
+server**, with a comment saying where and when it came from. If you cannot
+capture one, the code is unverified — say so rather than shipping green tests.
+
+## The meta-lesson for this round
+
+Four separate bugs, one shared cause: **a fixture that returned a shape no real
+server produces.** Test count, coverage percentage and a clean type-check
+cannot detect this, because they all measure agreement with the fixture.
+
+The only thing that detects it is contact with a real system. So:
+
+1. Get *something* real as early as possible, even one endpoint for one hour.
+2. Capture its output to disk (`corpora/`) and commit it. GPU time is scarce;
+   analysis against a saved corpus is free and repeatable.
+3. Make the regression suite run against that corpus, not against fixtures.
+4. Mutation-test the suite: break the thing on purpose and confirm the tests
+   fail. A test that cannot fail is documentation, not a test.

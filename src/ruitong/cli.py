@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from typing import Any, NoReturn
 
@@ -88,6 +89,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Candidate backend, e.g. rocm=http://mi300:8000 (overrides --ascend-endpoint)",
     )
     port_parser.add_argument(
+        "--api-key",
+        default=os.environ.get("RUITONG_API_KEY"),
+        help=(
+            "Bearer token sent to both endpoints. Defaults to $RUITONG_API_KEY. "
+            "Pass via the environment, not the command line, so it stays out of "
+            "shell history and process listings."
+        ),
+    )
+    port_parser.add_argument(
         "--output", default=None, help="Write the JSON report to this path"
     )
     return parser
@@ -102,7 +112,10 @@ def _parse_endpoint(spec: str, flag: str) -> tuple[str, str]:
 
 
 def _make_backends(
-    model: str, cuda_endpoint: str | None, ascend_endpoint: str | None
+    model: str,
+    cuda_endpoint: str | None,
+    ascend_endpoint: str | None,
+    api_key: str | None = None,
 ) -> tuple[Backend, Backend, bool]:
     """Return (reference, candidate, synthetic).
 
@@ -113,12 +126,12 @@ def _make_backends(
     synthetic = cuda_endpoint is None or ascend_endpoint is None
 
     cuda: Backend = (
-        VllmHttpBackend(name="cuda", base_url=cuda_endpoint)
+        VllmHttpBackend(name="cuda", base_url=cuda_endpoint, api_key=api_key)
         if cuda_endpoint
         else FakeCuda(model_ids=[model])
     )
     ascend: Backend = (
-        VllmHttpBackend(name="ascend", base_url=ascend_endpoint)
+        VllmHttpBackend(name="ascend", base_url=ascend_endpoint, api_key=api_key)
         if ascend_endpoint
         else FakeAscend(model_ids=[model])
     )
@@ -155,17 +168,23 @@ def _print_summary(
     print(f"Passed:    {'YES' if passed else 'NO'}")
     print()
 
+    # Gated metrics first, and marked. Without this the summary showed only
+    # cosine and full-vocab max-abs-diff — neither of which gates — so a
+    # reader could not tell from the output why a run passed or failed.
     labels = {
-        "cosine_similarity": "Cosine similarity",
-        "max_absolute_difference": "Max abs diff",
-        "top1_agreement": "Top-1 agreement",
-        "top5_set_agreement": "Top-5 set agreement",
-        "response_parity": "Response parity",
+        "token_matched_prob_diff": "Token-matched prob diff [GATE]",
+        "probability_mass_delta": "Prob-mass delta         [GATE]",
+        "top1_agreement": "Top-1 agreement         [GATE]",
+        "top5_set_agreement": "Top-5 set agreement     [GATE]",
+        "topk_max_abs_diff": "Top-k max abs diff      (reported)",
+        "cosine_similarity": "Cosine similarity       (reported)",
+        "max_absolute_difference": "Max abs diff            (reported)",
+        "response_parity": "Response parity         (reported)",
     }
     for key, label in labels.items():
         value = report.metrics.get(key)
         if value is not None:
-            print(f"{label + ':':<22}{value:.6f}")
+            print(f"{label + ':':<38}{value:.9f}")
     print()
 
 
@@ -202,12 +221,16 @@ def _run_port(args: argparse.Namespace) -> int:
                 f"--reference and --candidate both point at {ref_url!r}; "
                 "comparing an endpoint with itself certifies nothing"
             )
-        reference = VllmHttpBackend(name=ref_name, base_url=ref_url)
-        target = VllmHttpBackend(name=cand_name, base_url=cand_url)
+        reference = VllmHttpBackend(
+            name=ref_name, base_url=ref_url, api_key=args.api_key
+        )
+        target = VllmHttpBackend(
+            name=cand_name, base_url=cand_url, api_key=args.api_key
+        )
         synthetic = False
     else:
         cuda, ascend, synthetic = _make_backends(
-            model, args.cuda_endpoint, args.ascend_endpoint
+            model, args.cuda_endpoint, args.ascend_endpoint, args.api_key
         )
         # The target is the side being ported TO; the other is the reference.
         # Self-comparison is structurally impossible here — a backend compared

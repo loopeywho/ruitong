@@ -599,3 +599,83 @@ class TestBackendProtocol:
             return_value=httpx.Response(200, json=[])
         )
         await backend.health()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Real wire shapes — pinned to a live server, not to a fixture
+# ---------------------------------------------------------------------------
+
+
+class TestRealModelsEnvelope:
+    """`/v1/models` returns an envelope, not a bare list.
+
+    Captured verbatim from vLLM serving Qwen/Qwen3-8B on an NVIDIA A40
+    (RunPod pod vjqkdwuzls8hnf, 2026-07-27). Every prior test used a bare
+    list, which no OpenAI-compatible server has ever returned — so the whole
+    suite agreed with a fixture and missed that model ids resolved to "".
+    """
+
+    REAL_BODY = {
+        "object": "list",
+        "data": [
+            {
+                "id": "Qwen/Qwen3-8B",
+                "object": "model",
+                "created": 1769450000,
+                "owned_by": "vllm",
+                "root": "Qwen/Qwen3-8B",
+                "parent": None,
+                "max_model_len": 8128,
+            }
+        ],
+    }
+
+    @respx.mock
+    async def test_list_models_reads_data_envelope(self) -> None:
+        backend = VllmHttpBackend("cuda", "http://localhost:8000")
+        respx.get("http://localhost:8000/v1/models").mock(
+            return_value=httpx.Response(200, json=self.REAL_BODY)
+        )
+        models = await backend.list_models()
+        assert [m.id for m in models] == ["Qwen/Qwen3-8B"]
+
+    @respx.mock
+    async def test_health_counts_models_not_envelope_keys(self) -> None:
+        """Counting the envelope's keys reported 2 models for any response."""
+        backend = VllmHttpBackend("cuda", "http://localhost:8000")
+        respx.get("http://localhost:8000/v1/models").mock(
+            return_value=httpx.Response(200, json=self.REAL_BODY)
+        )
+        status = await backend.health()
+        assert status.healthy is True
+        assert status.models_served == 1
+
+    @respx.mock
+    async def test_api_key_is_sent_as_bearer(self) -> None:
+        """A hosted endpoint rejects unauthenticated calls; without this the
+        harness can only ever reach an open port."""
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured["auth"] = request.headers.get("authorization", "")
+            return httpx.Response(200, json=self.REAL_BODY)
+
+        backend = VllmHttpBackend(
+            "cuda", "http://localhost:8000", api_key="sk-test-123"
+        )
+        respx.get("http://localhost:8000/v1/models").mock(side_effect=_capture)
+        await backend.list_models()
+        assert captured["auth"] == "Bearer sk-test-123"
+
+    @respx.mock
+    async def test_no_auth_header_when_no_key(self) -> None:
+        captured: dict[str, str] = {}
+
+        def _capture(request: httpx.Request) -> httpx.Response:
+            captured["auth"] = request.headers.get("authorization", "")
+            return httpx.Response(200, json=self.REAL_BODY)
+
+        backend = VllmHttpBackend("cuda", "http://localhost:8000")
+        respx.get("http://localhost:8000/v1/models").mock(side_effect=_capture)
+        await backend.list_models()
+        assert captured["auth"] == ""

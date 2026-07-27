@@ -20,6 +20,7 @@ from .metrics import (
     topk_token_set_agreement,
     top_k_max_abs_diff,
     probability_mass,
+    token_matched_prob_diff,
 )
 
 
@@ -35,11 +36,33 @@ DEFAULT_TOP_LOGPROBS = 20
 class Thresholds:
     """Pass/fail thresholds for equivalence."""
 
-    # ── Gating thresholds (DECISIONS.md D7 — measured, not assumed) ──
+    # ── Primary gate (DECISIONS.md D9 — measured on real hardware) ───
     #
-    # top-k max abs diff: bf16 rounding measures 0.0152; the weakest injected
-    # fault measures 0.2341. 0.05 sits ~3x above the noise and ~5x below the
-    # nearest fault. See CALIBRATION.md.
+    # Token-matched probability difference. Calibrated against a captured
+    # Qwen3-8B corpus from an NVIDIA A40 (corpora/cuda_a40_qwen3_8b.json),
+    # not against synthetic fixtures:
+    #
+    #   identical port                    0.0        (exactly)
+    #   bf16 rounding (correct port)      1.293e-03  <- noise ceiling
+    #   scale x1.01 (weakest fault)       3.660e-03  <- detection limit
+    #   scale x1.05                       1.795e-02
+    #   swap top-2 / shift / demote top   ~1.0
+    #
+    # 2.2e-03 is the geometric mean of the noise ceiling and the weakest
+    # fault: 1.7x above noise, 1.7x below the nearest fault. That margin is
+    # thinner than one would like — a temperature error below ~1% is at or
+    # past the detection limit and is reported as such rather than hidden.
+    TOKEN_MATCHED_PROB_DIFF_MAX: float = 2.2e-03
+
+    # ── Demoted to reported-only (D9) ───────────────────────────────
+    # `top_k_max_abs_diff` was the D7 primary gate. Real hardware retired it:
+    # it ranks by position, so tail near-ties swap rank and it compares two
+    # *different* tokens; and it works in log space, so a shift at logprob
+    # -26 (p ~ 5e-12) scores the same as one at the argmax. Measured on the
+    # A40, two CORRECT executions of the same prompt differing only in
+    # prefix-cache state scored up to 1.25 — above the weakest fault at
+    # 0.406. Its noise and fault distributions overlap on real data, so no
+    # threshold exists that separates them. Kept for report continuity only.
     TOPK_MAX_ABS_DIFF_MAX: float = 0.05
     # probability-mass DELTA between the two backends (top-k only, so an
     # absolute check against 1.0 would be meaningless). A x1.05 scaling fault
@@ -79,6 +102,7 @@ class PerPromptResult:
     response_parity: float | None = None
     # Calibrated metrics — these are the ones that gate (D7).
     topk_max_abs_diff: float | None = None
+    token_matched_prob_diff: float | None = None
     probability_mass_delta: float | None = None
 
 
@@ -123,12 +147,14 @@ class EquivalenceReport:
                     "top5_set_agreement": r.top5_set_agreement,
                     "response_parity": r.response_parity,
                     "topk_max_abs_diff": r.topk_max_abs_diff,
+                    "token_matched_prob_diff": r.token_matched_prob_diff,
                     "probability_mass_delta": r.probability_mass_delta,
                 }
                 for r in self.per_prompt_results
             ],
             "passed": self.passed,
             "thresholds_used": {
+                "token_matched_prob_diff_max": self.thresholds_used.TOKEN_MATCHED_PROB_DIFF_MAX,
                 "topk_max_abs_diff_max": self.thresholds_used.TOPK_MAX_ABS_DIFF_MAX,
                 "prob_mass_tolerance": self.thresholds_used.PROB_MASS_TOLERANCE,
                 "cosine_min": self.thresholds_used.COSINE_MIN,
@@ -162,6 +188,21 @@ class EquivalenceRunner:
     def backend_b_name(self) -> str:
         return getattr(self.backend_b, "name", "unknown_b")
 
+    @staticmethod
+    async def _warm(backend: Backend, request: ChatRequest) -> None:
+        """Prime one backend's prefix cache; the response is discarded.
+
+        Failures are swallowed deliberately. This call exists only to put the
+        backend in a known cache state — if the endpoint is genuinely broken
+        the measured call that follows will say so, with a real error attached
+        to a real comparison. Failing here instead would report the warm-up as
+        the defect and hide what actually went wrong.
+        """
+        try:
+            await backend.chat(request)
+        except Exception:
+            return
+
     async def run(
         self, model: str, prompts: list[str]
     ) -> EquivalenceReport:
@@ -173,6 +214,7 @@ class EquivalenceRunner:
         """
         per_prompt: list[PerPromptResult] = []
         all_cosines: list[float] = []
+        all_tok_prob_diff: list[float] = []
         all_abs_diffs: list[float] = []
         all_top1: list[float] = []
         all_top5: list[float] = []
@@ -182,31 +224,35 @@ class EquivalenceRunner:
         warnings: list[str] = []
 
         for prompt in prompts:
+            request = ChatRequest(
+                model=model,
+                messages=[Message(role="user", content=prompt)],
+                # max_tokens=1 makes logprob vectors length-1, which
+                # forces cosine, top-1 and top-5 to a constant 1.0 —
+                # three of four gate metrics become decoration.
+                max_tokens=DEFAULT_COMPARISON_TOKENS,
+                logprobs=True,
+                top_logprobs=DEFAULT_TOP_LOGPROBS,
+            )
             try:
-                resp_a = await self.backend_a.chat(
-                    ChatRequest(
-                        model=model,
-                        messages=[Message(role="user", content=prompt)],
-                        # max_tokens=1 makes logprob vectors length-1, which
-                        # forces cosine, top-1 and top-5 to a constant 1.0 —
-                        # three of four gate metrics become decoration.
-                        max_tokens=DEFAULT_COMPARISON_TOKENS,
-                        logprobs=True,
-                        top_logprobs=DEFAULT_TOP_LOGPROBS,
-                    )
-                )
-                resp_b = await self.backend_b.chat(
-                    ChatRequest(
-                        model=model,
-                        messages=[Message(role="user", content=prompt)],
-                        # max_tokens=1 makes logprob vectors length-1, which
-                        # forces cosine, top-1 and top-5 to a constant 1.0 —
-                        # three of four gate metrics become decoration.
-                        max_tokens=DEFAULT_COMPARISON_TOKENS,
-                        logprobs=True,
-                        top_logprobs=DEFAULT_TOP_LOGPROBS,
-                    )
-                )
+                # ── Warm both sides before measuring (D9) ──────────────
+                # A prompt's FIRST execution takes no prefix-cache hits and
+                # returns measurably different logprobs from every later one.
+                # Measured on an A40 serving Qwen3-8B (2026-07-27): the first
+                # call scored +0 cache hits, the second +16, and the two
+                # differed by up to 8.65e-02 in token-matched probability —
+                # 24x the weakest fault this gate must catch. Once warm the
+                # server is bit-exact across repeats (16/16 prompts).
+                #
+                # So cache state is not noise to be tolerated; it is a
+                # variable to be held constant. Without this, whichever
+                # backend happens to be colder looks broken, and the report
+                # measures the cache instead of the silicon.
+                await self._warm(self.backend_a, request)
+                await self._warm(self.backend_b, request)
+
+                resp_a = await self.backend_a.chat(request)
+                resp_b = await self.backend_b.chat(request)
             except Exception as exc:
                 warnings.append(
                     f"Failed to run prompt '{prompt[:50]}': "
@@ -256,6 +302,13 @@ class EquivalenceRunner:
                 try:
                     # Calibrated (gating) metrics.
                     topk_diff = top_k_max_abs_diff(logs_a, logs_b, k=10)
+                    # Primary gate (D9). Needs token identity, so it degrades
+                    # to None rather than guessing when a backend omits it.
+                    tok_prob_diff = (
+                        token_matched_prob_diff(toks_a, logs_a, toks_b, logs_b, k=10)
+                        if toks_a and toks_b
+                        else None
+                    )
                     # Compare mass BETWEEN backends, not against 1.0.
                     # An OpenAI server returns only the top-k of a ~150k
                     # vocabulary, so this mass is legitimately far below 1.0
@@ -279,12 +332,17 @@ class EquivalenceRunner:
                         top1 = top_k_agreement(logs_a, logs_b, k=1)
                         top5 = top_k_set_agreement(logs_a, logs_b, k=5)
                     result.topk_max_abs_diff = round(topk_diff, 6)
+                    result.token_matched_prob_diff = (
+                        round(tok_prob_diff, 9) if tok_prob_diff is not None else None
+                    )
                     result.probability_mass_delta = round(mass_delta, 6)
                     result.cosine_sim = round(cos, 6)
                     result.max_abs_diff = round(abs_diff, 6)
                     result.top1_agreement = round(top1, 6)
                     result.top5_set_agreement = round(top5, 6)
                     all_topk_diff.append(topk_diff)
+                    if tok_prob_diff is not None:
+                        all_tok_prob_diff.append(tok_prob_diff)
                     all_mass_delta.append(mass_delta)
                     all_cosines.append(cos)
                     all_abs_diffs.append(abs_diff)
@@ -321,6 +379,9 @@ class EquivalenceRunner:
                 # Worst case across prompts, not mean. A mean lets one
                 # catastrophic prompt be averaged into silence, and makes the
                 # gate *weaker* the more prompts you add.
+                "token_matched_prob_diff": (
+                    round(max(all_tok_prob_diff), 9) if all_tok_prob_diff else None
+                ),
                 "topk_max_abs_diff": (
                     round(max(all_topk_diff), 6) if all_topk_diff else None
                 ),
@@ -357,18 +418,23 @@ class EquivalenceRunner:
             warnings=warnings,
         )
 
-        # ── Gate (DECISIONS.md D7) ──────────────────────────────────
+        # ── Gate (DECISIONS.md D9) ──────────────────────────────────
         #
-        # Only the calibrated metrics gate. cosine_similarity and full-vocab
-        # max_absolute_difference are computed and reported for continuity,
-        # but deliberately NOT gated: measurement showed the first is blind to
-        # scaling faults and the second rejects every correct BF16 port.
+        # Only calibrated metrics gate. Three are reported but deliberately
+        # NOT gated, each retired by measurement rather than opinion:
+        #   cosine_similarity        — scale-invariant, blind to scaling faults
+        #   max_absolute_difference  — full-vocab, rejects every correct port
+        #   topk_max_abs_diff        — ranks by position and works in log
+        #        space, so on real A40 data its noise (up to 1.25 between two
+        #        CORRECT executions) exceeds its weakest fault (0.406). No
+        #        threshold can separate overlapping distributions.
         gated: list[bool] = []
         m = report.metrics
 
-        if m.get("topk_max_abs_diff") is not None:
+        if m.get("token_matched_prob_diff") is not None:
             gated.append(
-                m["topk_max_abs_diff"] <= Thresholds.TOPK_MAX_ABS_DIFF_MAX
+                m["token_matched_prob_diff"]
+                <= Thresholds.TOKEN_MATCHED_PROB_DIFF_MAX
             )
         if m.get("probability_mass_delta") is not None:
             gated.append(
