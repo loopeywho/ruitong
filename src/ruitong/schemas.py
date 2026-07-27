@@ -41,15 +41,59 @@ class ChatRequest(BaseModel, frozen=True):
     top_logprobs: int | None = Field(default=None, ge=0, le=20)
 
 
+class TopLogprob(BaseModel, frozen=True):
+    """One candidate token and its logprob at a single position."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+
+
+class LogprobEntry(BaseModel, frozen=True):
+    """The chosen token at one position, plus the top-k alternatives."""
+
+    token: str
+    logprob: float
+    bytes: list[int] | None = None
+    top_logprobs: list[TopLogprob] = Field(default_factory=list)
+
+
+class ChoiceLogprobs(BaseModel, frozen=True):
+    """OpenAI's `choices[].logprobs` — an OBJECT, not a list.
+
+    Verified against a live OpenAI-shaped server: the wire format is
+    `{"content": [{token, logprob, bytes, top_logprobs: [...]}, ...]}`.
+    Declaring this as `list[float]` made every real response fail validation
+    and silently degrade the run to text-only comparison. The fixtures hid it
+    because they returned a bare list that nothing else produces.
+    """
+
+    content: list[LogprobEntry] = Field(default_factory=list)
+
+    def flat(self) -> list[float]:
+        """Chosen-token logprob per position."""
+        return [entry.logprob for entry in self.content]
+
+    def top_k_matrix(self) -> list[list[float]]:
+        """Per position, the top-k logprobs — the real comparison input."""
+        return [[t.logprob for t in e.top_logprobs] for e in self.content]
+
+    def top_k_tokens(self) -> list[list[str]]:
+        """Per position, the top-k token strings.
+
+        Token identity is what top-1/top-5 agreement is supposed to compare;
+        comparing positional indices instead is meaningless across backends.
+        """
+        return [[t.token for t in e.top_logprobs] for e in self.content]
+
+
 class Choice(BaseModel, frozen=True):
     """A single choice in a chat response."""
 
     index: int = Field(ge=0)
     message: Message
     finish_reason: str | None = None
-    # OpenAI-compatible logprobs for equivalence comparison.
-    logprobs: list[float] | None = None
-    top_logprobs: list[dict[int, float]] | None = None
+    logprobs: ChoiceLogprobs | None = None
 
 
 class Usage(BaseModel, frozen=True):

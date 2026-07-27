@@ -45,8 +45,8 @@ class PerPromptResult:
 
     prompt: str
     mode: str
-    cuda_logprobs: list[float] | None
-    ascend_logprobs: list[float] | None
+    cuda_logprobs: list[list[float]] | None
+    ascend_logprobs: list[list[float]] | None
     cuda_response: str
     ascend_response: str
     cosine_sim: float | None = None
@@ -185,8 +185,17 @@ class EquivalenceRunner:
                 )
                 continue
 
-            logs_a = resp_a.choices[0].logprobs
-            logs_b = resp_b.choices[0].logprobs
+            # `choices[].logprobs` is an OpenAI object, not a bare list.
+            # Compare the per-position top-k matrix — that is the actual
+            # distribution, and it is what the calibrated metrics expect.
+            lp_a = resp_a.choices[0].logprobs
+            lp_b = resp_b.choices[0].logprobs
+            logs_a = lp_a.top_k_matrix() if lp_a is not None else None
+            logs_b = lp_b.top_k_matrix() if lp_b is not None else None
+            # A server can return the object with an empty content array;
+            # treat that as "no logprobs" rather than comparing nothing.
+            if not logs_a or not logs_b:
+                logs_a = logs_b = None
             resp_a_text = resp_a.choices[0].message.content
             resp_b_text = resp_b.choices[0].message.content
 

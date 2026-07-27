@@ -11,6 +11,9 @@ from typing import AsyncIterator
 
 from ..errors import ModelNotFound
 from ..schemas import (
+    ChoiceLogprobs,
+    LogprobEntry,
+    TopLogprob,
     ChatChunk,
     ChatRequest,
     ChatResponse,
@@ -25,38 +28,46 @@ from ..schemas import (
 from .base import Backend
 
 
-# Deterministic logprob generation helpers
-def _fake_logprobs(seed: str, count: int = 3) -> tuple[list[float], list[dict[int, float]]]:
-    """Generate deterministic pseudo-logprobs from a seed string.
+def _fake_logprobs(seed: str, count: int = 3, offset: float = 0.0) -> ChoiceLogprobs:
+    """Deterministic logprobs in the REAL OpenAI wire shape.
 
-    Returns (logprobs, top_logprobs) where:
-    - logprobs: list of float log-likelihoods for top tokens
-    - top_logprobs: list of {token_id: logprob} dicts (5 tokens per position)
+    This must mirror what an OpenAI-compatible server actually returns —
+    `{"content": [{token, logprob, top_logprobs: [...]}]}` — not a convenient
+    bare list. The previous version returned `list[float]`, which no real
+    server emits, and that mismatch hid a validation failure that would have
+    made every response from a rented GPU unparseable.
+
+    Values are clamped to <= 0: a logprob is the log of a probability, so a
+    positive one is not physically meaningful and would corrupt any
+    probability-mass check computed from it.
     """
     raw = hashlib.sha256(seed.encode()).hexdigest()
-    raw_len = len(raw)  # 64
-    logprobs: list[float] = []
-    top_logprobs: list[dict[int, float]] = []
-    # Single linear counter avoids slice-wrap bugs
+    raw_len = len(raw)
+    entries: list[LogprobEntry] = []
     idx = 0
-    for i in range(count):
-        chunk = raw[idx:idx + 12]
-        idx += 12
-        value = int(chunk, 16) % 10000 / 1000.0 - 5.0  # range ~[-5, 5]
-        logprobs.append(round(value, 6))
-        top5: dict[int, float] = {}
-        for j in range(5):
-            pair = raw[idx:idx + 6]
-            idx += 6
-            if idx >= raw_len:
-                idx = (idx) % raw_len
-                pair = raw[idx:idx + 6]
-                idx += 6
+    for _ in range(count):
+        chunk = raw[idx : idx + 12]
+        idx = (idx + 12) % raw_len
+        value = -(int(chunk, 16) % 10000) / 2000.0 - offset  # ~[-5, 0]
+        tops: list[TopLogprob] = []
+        for rank in range(5):
+            pair = raw[idx : idx + 6]
+            idx = (idx + 6) % raw_len
             tok_id = (int(pair, 16) % 50000) + 1000
-            lp = round(value - j * 0.3, 6)
-            top5[tok_id] = lp
-        top_logprobs.append(top5)
-    return logprobs, top_logprobs
+            tops.append(
+                TopLogprob(
+                    token=f"tok_{tok_id}",
+                    logprob=round(value - rank * 0.3, 6),
+                )
+            )
+        entries.append(
+            LogprobEntry(
+                token=tops[0].token,
+                logprob=tops[0].logprob,
+                top_logprobs=tops,
+            )
+        )
+    return ChoiceLogprobs(content=entries)
 
 
 # Backend-specific multiplier for controlled divergence
@@ -100,11 +111,10 @@ class FakeCuda(Backend):
             raise self._error
         if not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "cuda")
-        logprobs, top_logprobs = _fake_logprobs(
-            f"{req.model}-cuda", count=3
+        choice_logprobs = _fake_logprobs(
+            f"{req.model}-cuda", count=3, offset=_CUDA_OFFSET
         )
         # Apply small deterministic CUDA offset so metrics can measure
-        logprobs = [round(lp - _CUDA_OFFSET, 6) for lp in logprobs]
         return ChatResponse(
             id="chatcmpl-cuda-1",
             model=req.model,
@@ -114,8 +124,7 @@ class FakeCuda(Backend):
                     index=0,
                     message=Message(role="assistant", content="I am CUDA"),
                     finish_reason="stop",
-                    logprobs=logprobs,
-                    top_logprobs=top_logprobs,
+                    logprobs=choice_logprobs,
                 )
             ],
             usage=Usage(prompt_tokens=10, completion_tokens=8, total_tokens=18),
@@ -177,11 +186,10 @@ class FakeAscend(Backend):
             raise self._error
         if not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "ascend")
-        logprobs, top_logprobs = _fake_logprobs(
-            f"{req.model}-ascend", count=3
+        choice_logprobs = _fake_logprobs(
+            f"{req.model}-ascend", count=3, offset=_ASCEND_OFFSET
         )
         # Apply larger deterministic Ascend offset so metrics can measure divergence
-        logprobs = [round(lp - _ASCEND_OFFSET, 6) for lp in logprobs]
         return ChatResponse(
             id="chatcmpl-ascend-1",
             model=req.model,
@@ -191,8 +199,7 @@ class FakeAscend(Backend):
                     index=0,
                     message=Message(role="assistant", content="I am Ascend"),
                     finish_reason="stop",
-                    logprobs=logprobs,
-                    top_logprobs=top_logprobs,
+                    logprobs=choice_logprobs,
                 )
             ],
             usage=Usage(prompt_tokens=12, completion_tokens=9, total_tokens=21),
