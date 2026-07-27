@@ -70,16 +70,41 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Base URL of the Ascend vllm-ascend server",
     )
+    # Vendor-neutral form. The harness only ever sees logprobs over an
+    # OpenAI-compatible endpoint, so it has no idea what silicon is behind it —
+    # ROCm, Gaudi, Trainium, MetaX and Moore Threads all work unchanged. This
+    # is what lets one tool serve both the China market (Ascend) and the
+    # Western market (AMD/Intel/AWS) without a second codebase.
+    port_parser.add_argument(
+        "--reference",
+        default=None,
+        metavar="NAME=URL",
+        help="Reference backend, e.g. cuda=http://gpu:8000 (overrides --cuda-endpoint)",
+    )
+    port_parser.add_argument(
+        "--candidate",
+        default=None,
+        metavar="NAME=URL",
+        help="Candidate backend, e.g. rocm=http://mi300:8000 (overrides --ascend-endpoint)",
+    )
     port_parser.add_argument(
         "--output", default=None, help="Write the JSON report to this path"
     )
     return parser
 
 
+def _parse_endpoint(spec: str, flag: str) -> tuple[str, str]:
+    """Parse a NAME=URL backend spec."""
+    name, separator, url = spec.partition("=")
+    if not separator or not name.strip() or not url.strip():
+        _fail(f"{flag} expects NAME=URL (e.g. rocm=http://host:8000), got {spec!r}")
+    return name.strip(), url.strip()
+
+
 def _make_backends(
     model: str, cuda_endpoint: str | None, ascend_endpoint: str | None
 ) -> tuple[Backend, Backend, bool]:
-    """Return (cuda, ascend, synthetic).
+    """Return (reference, candidate, synthetic).
 
     Endpoints are used when supplied. When either is missing we fall back to
     fixtures and report `synthetic=True` — such a run can never pass, because
@@ -156,17 +181,34 @@ def _write_report(path: str, payload: dict[str, Any]) -> None:
 def _run_port(args: argparse.Namespace) -> int:
     model: str = args.model
 
-    cuda, ascend, synthetic = _make_backends(
-        model, args.cuda_endpoint, args.ascend_endpoint
-    )
+    reference: Backend
+    target: Backend
 
-    # The target is the side being ported TO; the other side is the reference.
-    # Self-comparison is structurally impossible here — a backend compared with
-    # itself always agrees, so it certifies nothing.
-    if args.target == "ascend":
-        reference, target = cuda, ascend
+    if args.reference or args.candidate:
+        # Vendor-neutral path: any two OpenAI-compatible endpoints.
+        if not (args.reference and args.candidate):
+            _fail("--reference and --candidate must be supplied together")
+        ref_name, ref_url = _parse_endpoint(args.reference, "--reference")
+        cand_name, cand_url = _parse_endpoint(args.candidate, "--candidate")
+        if ref_name == cand_name:
+            _fail(
+                f"--reference and --candidate are both named {ref_name!r}; "
+                "a backend compared with itself always agrees and certifies nothing"
+            )
+        reference = VllmHttpBackend(name=ref_name, base_url=ref_url)
+        target = VllmHttpBackend(name=cand_name, base_url=cand_url)
+        synthetic = False
     else:
-        reference, target = ascend, cuda
+        cuda, ascend, synthetic = _make_backends(
+            model, args.cuda_endpoint, args.ascend_endpoint
+        )
+        # The target is the side being ported TO; the other is the reference.
+        # Self-comparison is structurally impossible here — a backend compared
+        # with itself always agrees, so it certifies nothing.
+        if args.target == "ascend":
+            reference, target = cuda, ascend
+        else:
+            reference, target = ascend, cuda
 
     runner = EquivalenceRunner(reference, target)
 

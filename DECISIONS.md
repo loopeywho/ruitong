@@ -90,3 +90,35 @@ CPU) before shipping — `PHASE_4_5_PROPOSAL.md` §4.5a.
 
 **Why it matters:** per D5 the report *is* the product. A gate that fails correct ports destroys
 trust on contact; one blind to a fault class ships a silent false PASS the customer acts on.
+
+## D8 · 2026-07-27 — One harness, both markets (vendor-neutral backends)
+
+**Boss's directive: a monetising pain point on BOTH sides of the globe.** That is now implemented
+rather than argued about.
+
+The harness only ever sees logprobs over an OpenAI-compatible endpoint. It has no knowledge of the
+silicon behind it. So the same tool serves:
+
+- **China side** — Ascend via `vllm-ascend` (`--ascend-endpoint`)
+- **Western side** — AMD ROCm, Intel Gaudi, AWS Trainium, and any other OpenAI-compatible server
+  (`--reference NAME=URL --candidate NAME=URL`)
+
+No second codebase, no fork. `cuda`/`ascend` remain as convenience shortcuts; the neutral form takes
+arbitrary backend names.
+
+**Why this matters commercially, not just technically:**
+
+1. **Two revenue sides from one build.** The China side has the market (documented pain: vllm-ascend
+   issue #31 open 17 months, 7 correctness issues last month). The Western side has *reachability* —
+   AMD and NVIDIA are rentable by the hour from Hong Kong, customers can pay a HK company, and no
+   export-control question applies.
+2. **The Western side is where we can self-verify.** Boss has no independent way to QC Ascend
+   numerics and no legal path to the hardware. On AMD/NVIDIA we can run it ourselves, which is the
+   only way to earn the right to make an equivalence claim at all.
+3. **It de-risks the Ascend side rather than abandoning it.** Everything proven on
+   NVIDIA↔AMD — the metrics, the tolerances, the report format, the fault-detection sensitivity —
+   transfers unchanged to Ascend the moment counsel and hardware access clear.
+
+Self-comparison is refused on this path too: identical reference and candidate names exit 2.
+
+Verified: 194 passed, mypy clean.
