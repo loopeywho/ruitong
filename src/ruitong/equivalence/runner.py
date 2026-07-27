@@ -63,6 +63,11 @@ class EquivalenceReport:
     model: str
     mode: str
     total_prompts: int
+    # Coverage. A verdict computed from 1 of 100 prompts is not a verdict, and
+    # an outage must be distinguishable from a genuine equivalence failure —
+    # they demand opposite responses from whoever reads the report.
+    compared_prompts: int = 0
+    errored_prompts: int = 0
     metrics: dict[str, Any] = field(default_factory=dict)
     per_prompt_results: list[PerPromptResult] = field(default_factory=list)
     passed: bool = False
@@ -75,6 +80,8 @@ class EquivalenceReport:
             "model": self.model,
             "mode": self.mode,
             "total_prompts": self.total_prompts,
+            "compared_prompts": self.compared_prompts,
+            "errored_prompts": self.errored_prompts,
             "metrics": self.metrics,
             "per_prompt_results": [
                 {
@@ -242,11 +249,15 @@ class EquivalenceRunner:
 
             per_prompt.append(result)
 
+        errored = sum(1 for r in per_prompt if r.mode == "error")
+
         # Aggregate metrics
         report = EquivalenceReport(
             model=model,
             mode="logprob" if all_cosines else "task_parity",
             total_prompts=len(prompts),
+            compared_prompts=len(prompts) - errored,
+            errored_prompts=errored,
             metrics={
                 "cosine_similarity": (
                     round(sum(all_cosines) / len(all_cosines), 6)

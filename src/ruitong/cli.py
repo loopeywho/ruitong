@@ -195,6 +195,13 @@ def _run_port(args: argparse.Namespace) -> int:
                 f"--reference and --candidate are both named {ref_name!r}; "
                 "a backend compared with itself always agrees and certifies nothing"
             )
+        # Distinct names are not enough: two labels pointing at the SAME URL
+        # is still a backend compared with itself, and it always passes.
+        if ref_url.rstrip("/") == cand_url.rstrip("/"):
+            _fail(
+                f"--reference and --candidate both point at {ref_url!r}; "
+                "comparing an endpoint with itself certifies nothing"
+            )
         reference = VllmHttpBackend(name=ref_name, base_url=ref_url)
         target = VllmHttpBackend(name=cand_name, base_url=cand_url)
         synthetic = False
@@ -217,7 +224,14 @@ def _run_port(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 — surfaced as "could not run", not a gate failure
         _fail(f"Comparison could not run: {type(exc).__name__}: {exc}")
 
-    passed = report.passed and not synthetic
+    # Coverage gate. Any errored prompt means we did not measure what we
+    # claimed to measure, so the run cannot pass. If NOTHING was compared the
+    # answer is "could not run" (exit 2), never "the port failed" (exit 1) —
+    # an outage and a broken port demand opposite responses.
+    incomplete = report.errored_prompts > 0
+    nothing_compared = report.compared_prompts == 0
+
+    passed = report.passed and not synthetic and not incomplete
 
     payload = report.to_dict()
     payload["synthetic"] = synthetic
@@ -230,6 +244,13 @@ def _run_port(args: argparse.Namespace) -> int:
             "This report certifies nothing about real hardware and cannot pass. "
             "Supply --cuda-endpoint and --ascend-endpoint."
         )
+    if incomplete:
+        payload["passed"] = False
+        payload.setdefault("warnings", []).append(
+            f"INCOMPLETE: {report.errored_prompts} of {report.total_prompts} "
+            f"prompts errored, so only {report.compared_prompts} were actually "
+            "compared. A verdict computed from a subset is not a verdict."
+        )
 
     _print_summary(report, reference.name, target.name, synthetic, passed)
 
@@ -241,6 +262,15 @@ def _run_port(args: argparse.Namespace) -> int:
     # flawless track record — precisely when the failing artifact matters most.
     if args.output:
         _write_report(args.output, payload)
+
+    if nothing_compared:
+        print(
+            "Error: no prompts could be compared — the backends were "
+            "unreachable or returned nothing usable. This is NOT an "
+            "equivalence failure; nothing was measured.",
+            file=sys.stderr,
+        )
+        return EXIT_CANNOT_RUN
 
     return EXIT_PASS if passed else EXIT_GATE_FAILED
 
