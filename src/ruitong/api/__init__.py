@@ -7,24 +7,43 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 
 class PortRequest(BaseModel):
     """Request to run an equivalence port comparison."""
 
-    model: str = Field(..., min_length=1, description="Model name to compare")
+    model: str = Field(
+        ..., min_length=1, max_length=256, description="Model name to compare"
+    )
     target: str = Field(
         default="auto",
         pattern=r"^(cuda|ascend|auto)$",
         description="Backend target: cuda, ascend, or auto",
     )
+    # Both bounds matter. `min_length` alone bounds the list from below only:
+    # the comparison loop is CPU-bound and never awaits, so an unbounded list
+    # blocks the event loop for the whole process — one request stalled
+    # /v1/health from 6ms to 10.5s in testing, and the container healthcheck
+    # then kills a server that is merely busy.
     prompts: list[str] | None = Field(
         default=None,
         min_length=1,
-        description="Custom prompts (default: 3 built-in prompts)",
+        max_length=64,
+        description="Custom prompts, 1-64 (default: 3 built-in prompts)",
     )
+
+    @field_validator("prompts")
+    @classmethod
+    def _bound_prompt_length(cls, value: list[str] | None) -> list[str] | None:
+        """Cap each prompt. The list cap alone still permits 64 x 10MB."""
+        if value is None:
+            return None
+        for prompt in value:
+            if len(prompt) > 8192:
+                raise ValueError("each prompt must be 8192 characters or fewer")
+        return value
 
 
 class PortMetric(BaseModel):

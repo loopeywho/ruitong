@@ -93,7 +93,16 @@ async def auth_middleware(request: Request, call_next):
         provided = request.headers.get("X-API-Key", "")
         # Constant-time compare: `!=` leaks key length and prefix via response
         # timing, letting an attacker recover the key byte by byte.
-        if not hmac.compare_digest(provided, config.api_key):
+        #
+        # Compare BYTES, not str: hmac.compare_digest raises TypeError on
+        # non-ASCII str. Starlette decodes headers as latin-1, so any byte
+        # >= 0x80 in the header would otherwise turn a 401 into an
+        # unauthenticated 500 — and a non-ASCII configured key would 500 every
+        # request, including correctly authenticated ones.
+        if not hmac.compare_digest(
+            provided.encode("utf-8", "surrogateescape"),
+            config.api_key.encode("utf-8"),
+        ):
             return JSONResponse(
                 status_code=401,
                 content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},

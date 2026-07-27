@@ -1,9 +1,18 @@
 """Ruitong CLI — equivalence harness entry point.
 
 Usage:
-    ruitong port <model> --target ascend [--output report.json]
-    ruitong port <model> --target cuda    [--output report.json]
-    ruitong port <model>                   # auto — compare both backends
+    ruitong port <model> --cuda-endpoint URL --ascend-endpoint URL [--output report.json]
+    ruitong port <model> --target cuda   # reverse direction: Ascend is the reference
+    ruitong port <model>                 # no endpoints -> SYNTHETIC dry run, cannot pass
+
+Exit codes (CI contract):
+    0  equivalence gate passed
+    1  gate failed — the port is not equivalent
+    2  could not run — backend unreachable, no comparisons made, or write error
+
+`2` is deliberately distinct from `1`: "the port is broken" and "we could not
+tell" demand opposite responses, and collapsing them lets an infrastructure
+outage read as a clean bill of health.
 """
 
 from __future__ import annotations
@@ -12,15 +21,22 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import NoReturn
+from typing import Any, NoReturn
 
+from .backends.base import Backend
 from .backends.fake import FakeAscend, FakeCuda
-from .equivalence.runner import EquivalenceRunner, EquivalenceReport
+from .backends.vllm_http import VllmHttpBackend
+from .equivalence.runner import EquivalenceReport, EquivalenceRunner
+
+EXIT_PASS = 0
+EXIT_GATE_FAILED = 1
+EXIT_CANNOT_RUN = 2
 
 
-def _print_error(msg: str) -> NoReturn:
+def _fail(msg: str) -> NoReturn:
+    """Exit 2 — we could not run the comparison. Not a gate failure."""
     print(f"Error: {msg}", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(EXIT_CANNOT_RUN)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -32,46 +48,64 @@ def _build_parser() -> argparse.ArgumentParser:
 
     port_parser = sub.add_parser(
         "port",
-        help="Run equivalence comparison between CUDA and Ascend backends",
+        help="Compare a model across CUDA and Ascend backends",
     )
-    port_parser.add_argument(
-        "model",
-        help="Model name to compare (e.g. Qwen3-8B)",
-    )
+    port_parser.add_argument("model", help="Model name (e.g. Qwen3-8B)")
     port_parser.add_argument(
         "--target",
-        choices=["cuda", "ascend", "auto"],
-        default="auto",
-        help="Target backend(s): cuda, ascend, or auto (default: auto)",
+        choices=["ascend", "cuda"],
+        default="ascend",
+        help=(
+            "Backend being ported TO. The other side is the reference. "
+            "Default: ascend (CUDA reference -> Ascend target)."
+        ),
     )
     port_parser.add_argument(
-        "--output",
+        "--cuda-endpoint",
         default=None,
-        help="Write JSON report to this file path",
+        help="Base URL of the CUDA vLLM server (e.g. http://gpu-host:8000)",
+    )
+    port_parser.add_argument(
+        "--ascend-endpoint",
+        default=None,
+        help="Base URL of the Ascend vllm-ascend server",
+    )
+    port_parser.add_argument(
+        "--output", default=None, help="Write the JSON report to this path"
     )
     return parser
 
 
-def _make_runner(
-    model: str, target: str
-) -> tuple[EquivalenceRunner, str | None, str | None]:
-    """Build the runner and determine which backends to compare."""
-    if target == "auto":
-        cuda = FakeCuda(model_ids=[model])
-        ascend = FakeAscend(model_ids=[model])
-        return EquivalenceRunner(cuda, ascend), "cuda", "ascend"
-    elif target == "cuda":
-        cuda = FakeCuda(model_ids=[model])
-        return EquivalenceRunner(cuda, cuda), "cuda", "cuda"
-    elif target == "ascend":
-        ascend = FakeAscend(model_ids=[model])
-        return EquivalenceRunner(ascend, ascend), "ascend", "ascend"
-    else:
-        _print_error(f"Unknown target: {target}")  # unreachable
+def _make_backends(
+    model: str, cuda_endpoint: str | None, ascend_endpoint: str | None
+) -> tuple[Backend, Backend, bool]:
+    """Return (cuda, ascend, synthetic).
+
+    Endpoints are used when supplied. When either is missing we fall back to
+    fixtures and report `synthetic=True` — such a run can never pass, because
+    a report computed from fixtures certifies nothing about real hardware.
+    """
+    synthetic = cuda_endpoint is None or ascend_endpoint is None
+
+    cuda: Backend = (
+        VllmHttpBackend(name="cuda", base_url=cuda_endpoint)
+        if cuda_endpoint
+        else FakeCuda(model_ids=[model])
+    )
+    ascend: Backend = (
+        VllmHttpBackend(name="ascend", base_url=ascend_endpoint)
+        if ascend_endpoint
+        else FakeAscend(model_ids=[model])
+    )
+    return cuda, ascend, synthetic
 
 
 def _default_prompts(model: str) -> list[str]:
-    """Return a small set of default prompts for equivalence testing."""
+    """Default probe prompts.
+
+    Deliberately varied — the fixture backends previously ignored the prompt
+    entirely, so three prompts measured the same thing once.
+    """
     return [
         f"What is {model}? Answer in one sentence.",
         "Explain the concept of transformers.",
@@ -79,69 +113,115 @@ def _default_prompts(model: str) -> list[str]:
     ]
 
 
-def main(argv: list[str] | None = None) -> None:
+def _print_summary(
+    report: EquivalenceReport,
+    reference: str,
+    target: str,
+    synthetic: bool,
+    passed: bool,
+) -> None:
+    print("=== Ruitong Equivalence Report ===")
+    print(f"Model:     {report.model}")
+    print(f"Mode:      {report.mode}")
+    print(f"Prompts:   {report.total_prompts}")
+    print(f"Compare:   {reference} (reference) vs {target} (target)")
+    if synthetic:
+        print("Data:      SYNTHETIC — fixture backends, no hardware contacted")
+    print(f"Passed:    {'YES' if passed else 'NO'}")
+    print()
+
+    labels = {
+        "cosine_similarity": "Cosine similarity",
+        "max_absolute_difference": "Max abs diff",
+        "top1_agreement": "Top-1 agreement",
+        "top5_set_agreement": "Top-5 set agreement",
+        "response_parity": "Response parity",
+    }
+    for key, label in labels.items():
+        value = report.metrics.get(key)
+        if value is not None:
+            print(f"{label + ':':<22}{value:.6f}")
+    print()
+
+
+def _write_report(path: str, payload: dict[str, Any]) -> None:
+    try:
+        with open(path, "w") as handle:
+            json.dump(payload, handle, indent=2)
+        print(f"Report written to {path}")
+    except OSError as exc:
+        _fail(f"Cannot write report: {exc}")
+
+
+def _run_port(args: argparse.Namespace) -> int:
+    model: str = args.model
+
+    cuda, ascend, synthetic = _make_backends(
+        model, args.cuda_endpoint, args.ascend_endpoint
+    )
+
+    # The target is the side being ported TO; the other side is the reference.
+    # Self-comparison is structurally impossible here — a backend compared with
+    # itself always agrees, so it certifies nothing.
+    if args.target == "ascend":
+        reference, target = cuda, ascend
+    else:
+        reference, target = ascend, cuda
+
+    runner = EquivalenceRunner(reference, target)
+
+    try:
+        report: EquivalenceReport = asyncio.run(runner.run(model, _default_prompts(model)))
+    except Exception as exc:  # noqa: BLE001 — surfaced as "could not run", not a gate failure
+        _fail(f"Comparison could not run: {type(exc).__name__}: {exc}")
+
+    passed = report.passed and not synthetic
+
+    payload = report.to_dict()
+    payload["synthetic"] = synthetic
+    payload["reference_backend"] = reference.name
+    payload["target_backend"] = target.name
+    if synthetic:
+        payload["passed"] = False
+        payload.setdefault("warnings", []).append(
+            "SYNTHETIC RUN: no endpoints supplied, so fixture backends were used. "
+            "This report certifies nothing about real hardware and cannot pass. "
+            "Supply --cuda-endpoint and --ascend-endpoint."
+        )
+
+    _print_summary(report, reference.name, target.name, synthetic, passed)
+
+    for warning in payload.get("warnings", []):
+        print(f"  WARN: {warning}", file=sys.stderr)
+
+    # Write the report BEFORE deciding the exit code. Writing only on success
+    # produces an archive containing exclusively passing runs, which reads as a
+    # flawless track record — precisely when the failing artifact matters most.
+    if args.output:
+        _write_report(args.output, payload)
+
+    return EXIT_PASS if passed else EXIT_GATE_FAILED
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point. Returns an exit code rather than calling sys.exit().
+
+    Returning the code keeps `main` callable in-process, so the CLI's paths are
+    measurable by coverage instead of only reachable via subprocess.
+    """
     parser = _build_parser()
     args = parser.parse_args(argv)
 
     if args.command is None:
         parser.print_help()
-        sys.exit(0)
+        return EXIT_PASS
 
     if args.command == "port":
-        _run_port(args)
+        return _run_port(args)
 
-
-def _run_port(args: argparse.Namespace) -> None:
-    model = args.model
-    target = args.target
-
-    runner, name_a, name_b = _make_runner(model, target)
-    prompts = _default_prompts(model)
-
-    report: EquivalenceReport = asyncio.run(runner.run(model, prompts))
-
-    # Print summary to stdout
-    print(f"=== Ruitong Equivalence Report ===")
-    print(f"Model:  {report.model}")
-    print(f"Mode:   {report.mode}")
-    print(f"Prompt: {report.total_prompts}")
-    if name_a != name_b:
-        print(f"Compare: {name_a} vs {name_b}")
-    else:
-        print(f"Target:  {name_a}")
-    print(f"Passed: {'YES' if report.passed else 'NO'}")
-    print()
-
-    m = report.metrics
-    if m.get("cosine_similarity") is not None:
-        print(f"Cosine similarity:    {m['cosine_similarity']:.6f}")
-    if m.get("max_absolute_difference") is not None:
-        print(f"Max abs diff:         {m['max_absolute_difference']:.6f}")
-    if m.get("top1_agreement") is not None:
-        print(f"Top-1 agreement:      {m['top1_agreement']:.6f}")
-    if m.get("top5_set_agreement") is not None:
-        print(f"Top-5 set agreement:  {m['top5_set_agreement']:.6f}")
-    if m.get("response_parity") is not None:
-        print(f"Response parity:      {m['response_parity']:.6f}")
-    print()
-
-    if report.warnings:
-        for w in report.warnings:
-            print(f"  WARN: {w}", file=sys.stderr)
-
-    # P1 #2 — exit with non-zero when comparison fails
-    if not report.passed:
-        sys.exit(1)
-
-    # Write JSON report if requested
-    if args.output:
-        try:
-            with open(args.output, "w") as f:
-                json.dump(report.to_dict(), f, indent=2)
-            print(f"Report written to {args.output}")
-        except OSError as exc:
-            _print_error(f"Cannot write report: {exc}")
+    parser.print_help()
+    return EXIT_CANNOT_RUN
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

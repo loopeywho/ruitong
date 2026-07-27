@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg-info
 dist/
 build/
 .venv/
@@ -9,4 +10,13 @@ coverage.xml
 .coverage
 htmlcov/
 .pytest_cache/
-*.egg-info
+
+# Secrets — previously absent; a SECURITY_AUDIT claim of coverage was wrong.
+.env
+.env.*
+!.env.example
+
+# Job store: equivalence reports are customer data and must never be committed.
+*.db
+*.sqlite
+*.sqlite3
