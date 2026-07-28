@@ -102,6 +102,8 @@ class JobStore:
         migration sentinel for pre-ownership jobs, which no live principal can
         ever equal.
         """
+        if not owner:
+            raise ValueError("owner is required")
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
@@ -147,6 +149,8 @@ class JobStore:
 
     def list_by_owner(self, owner: str) -> list[JobInfo]:
         """Return all jobs owned by the given principal."""
+        if not owner:
+            raise ValueError("owner is required")
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM jobs WHERE owner = ? ORDER BY created_at DESC",
@@ -159,6 +163,8 @@ class JobStore:
 
         Returns True if a row was deleted, False if nothing matched.
         """
+        if not owner:
+            raise ValueError("owner is required")
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)

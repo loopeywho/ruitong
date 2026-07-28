@@ -100,44 +100,73 @@ class TestPortEndpoint:
 class TestPortPreviewEndpoint:
     """POST /v1/port/preview — async job submission."""
 
-    def test_preview_submit_returns_job(self, client: TestClient) -> None:
+    def test_preview_submit_returns_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Submit returns 202 with job_id (full UUIDv4)."""
-        resp = client.post("/v1/port/preview", json={"model": "test-model"})
+        monkeypatch.setenv("RUITONG_API_KEY", "test-key")
+        import importlib
+        import ruitong.main
+        importlib.reload(ruitong.main)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.post(
+                "/v1/port/preview",
+                json={"model": "test-model"},
+                headers={"X-API-Key": "test-key"},
+            )
         assert resp.status_code == 202, resp.text
         data = resp.json()
         assert data["job_id"] is not None
         assert len(data["job_id"]) == 32  # UUIDv4 hex = 32 chars
         assert data["status"] == "pending"
 
-    def test_preview_poll(self, client: TestClient) -> None:
+    def test_preview_poll(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Poll job endpoint eventually returns done."""
-        # Submit
-        resp = client.post("/v1/port/preview", json={"model": "Qwen3-8B"})
-        assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
+        monkeypatch.setenv("RUITONG_API_KEY", "test-key")
+        import importlib
+        import ruitong.main
+        importlib.reload(ruitong.main)
+        with TestClient(ruitong.main.app) as client:
+            # Submit
+            resp = client.post(
+                "/v1/port/preview",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": "test-key"},
+            )
+            assert resp.status_code == 202
+            job_id = resp.json()["job_id"]
 
-        # Poll until done
-        for _ in range(20):
-            poll = client.get(f"/v1/port/preview/{job_id}")
-            assert poll.status_code == 200
-            status = poll.json()["status"]
-            if status == "done":
-                break
-            time.sleep(0.1)
-        else:
-            pytest.fail("Job did not complete in time")
+            # Poll until done
+            for _ in range(20):
+                poll = client.get(
+                    f"/v1/port/preview/{job_id}",
+                    headers={"X-API-Key": "test-key"},
+                )
+                assert poll.status_code == 200
+                status = poll.json()["status"]
+                if status == "done":
+                    break
+                time.sleep(0.1)
+            else:
+                pytest.fail("Job did not complete in time")
 
-        data = poll.json()
-        assert data["status"] == "done"
-        assert data["result"]["report"]["model"] == "Qwen3-8B"
-        assert data["result"]["report"]["validation_level"] == "simulated"
-        assert "cosine_similarity" in {
-            m["name"] for m in data["result"]["report"]["metrics"]
-        }
+            data = poll.json()
+            assert data["status"] == "done"
+            assert data["result"]["report"]["model"] == "Qwen3-8B"
+            assert data["result"]["report"]["validation_level"] == "simulated"
+            assert "cosine_similarity" in {
+                m["name"] for m in data["result"]["report"]["metrics"]
+            }
 
-    def test_preview_poll_not_found(self, client: TestClient) -> None:
+    def test_preview_poll_not_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unknown job_id returns 404."""
-        resp = client.get("/v1/port/preview/nonexistent")
+        monkeypatch.setenv("RUITONG_API_KEY", "test-key")
+        import importlib
+        import ruitong.main
+        importlib.reload(ruitong.main)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get(
+                "/v1/port/preview/nonexistent",
+                headers={"X-API-Key": "test-key"},
+            )
         assert resp.status_code == 404
 
     def test_preview_accepts_target(self, client: TestClient) -> None:
@@ -429,12 +458,17 @@ class TestJobConcurrency:
     def test_concurrency_cap_blocks_when_active_jobs_exist(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When max_concurrent_jobs is 1, and a job is pending, new jobs get 429."""
         monkeypatch.setenv("RUITONG_MAX_CONCURRENT_JOBS", "1")
+        monkeypatch.setenv("RUITONG_API_KEY", "test-key")
         import importlib
         import ruitong.main
         importlib.reload(ruitong.main)
         with TestClient(ruitong.main.app) as c:
             # Submit a job — store it as pending
-            resp1 = c.post("/v1/port/preview", json={"model": "Qwen3-8B"})
+            resp1 = c.post(
+                "/v1/port/preview",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": "test-key"},
+            )
             assert resp1.status_code == 202, resp1.text
 
             # Directly reset the job to pending so the second submission sees it
@@ -445,6 +479,10 @@ class TestJobConcurrency:
                 store.update_status(resp1.json()["job_id"], JobStatus.pending)
 
             # Second job — should be rejected
-            resp2 = c.post("/v1/port/preview", json={"model": "Qwen3-8B"})
+            resp2 = c.post(
+                "/v1/port/preview",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": "test-key"},
+            )
             assert resp2.status_code == 429, resp2.text
             assert "Too many concurrent jobs" in resp2.json()["detail"]

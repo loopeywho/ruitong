@@ -54,6 +54,22 @@ def _principal(request: Request) -> str:
     return getattr(request.state, "api_key_principal", "")
 
 
+def _require_owner(request: Request) -> str:
+    """Return the authenticated owner or raise 403.
+
+    Belt-and-braces defence: an empty owner (dev mode, middleware bug, or
+    missing state) must never reach the store — it would either bypass
+    scoping or match a sentinel row.  Fail closed.
+    """
+    owner = _principal(request)
+    if not owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Owner identification required — enable authentication",
+        )
+    return owner
+
+
 def _default_prompts(model: str) -> list[str]:
     return [
         f"What is {model}? Answer in one sentence.",
@@ -161,7 +177,7 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = _principal(request)
+    owner = _require_owner(request)
     store.create(job, model=req.model, target=req.target, owner=owner)
 
     # Launch background task
@@ -216,7 +232,7 @@ async def get_port_job(job_id: str, request: Request) -> JobInfo:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = _principal(request)
+    owner = _require_owner(request)
     job = store.get(job_id, owner=owner)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -233,7 +249,7 @@ async def list_port_jobs(request: Request) -> list[JobInfo]:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = _principal(request)
+    owner = _require_owner(request)
     return store.list_by_owner(owner)
 
 
@@ -247,7 +263,7 @@ async def delete_port_job(job_id: str, request: Request) -> None:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = _principal(request)
+    owner = _require_owner(request)
     deleted = store.delete(job_id, owner=owner)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")

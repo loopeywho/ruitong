@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import time
 from contextlib import asynccontextmanager
@@ -309,7 +310,11 @@ async def auth_middleware(request: Request, call_next):
                     status_code=401,
                     content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
                 )
-            request.state.api_key_principal = provided
+            # Use a stable hash of the key as principal — never store the raw key
+            # in request state or persist it to the database (P2 F4 fix).
+            request.state.api_key_principal = hashlib.sha256(
+                provided.encode("utf-8")
+            ).hexdigest()[:16]
 
     else:
         # No auth configured (dev mode) — do not set api_key_principal,
