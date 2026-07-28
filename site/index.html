@@ -150,10 +150,66 @@
   </table>
   </div>
 
-  <p>The threshold sits at <strong>2.2e-03</strong>, the geometric mean of the noise ceiling and
-  the weakest fault. The margin is <strong>1.7×</strong> in each direction. We would rather state
-  that plainly than imply more precision than we have: <strong>a temperature error below roughly
-  1% is at or past this gate&rsquo;s detection limit.</strong></p>
+  <p class="mut">Those fault magnitudes are measured against a <em>simulated</em> correct port —
+  bfloat16 rounding applied to the A40&rsquo;s own output. We then tested that simulation against
+  two real GPUs, and it did not survive. See below.</p>
+
+  <h2>The first real cross-hardware measurement</h2>
+
+  <p>NVIDIA A40 (Ampere) against NVIDIA RTX 6000 Ada. Same vendor, same 48&nbsp;GB, same vLLM
+  image, same <code>Qwen3-8B</code>, same seed, both warm and both individually bit-exact. The
+  only variable is the silicon.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Measure</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Identical output text</td><td class="num">13 / 16 prompts</td></tr>
+      <tr><td><strong>Different output text</strong></td><td class="num"><strong>3 / 16 prompts</strong></td></tr>
+      <tr><td>Top-1 token agreement (before divergence)</td><td class="num">1.000</td></tr>
+      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.122</td></tr>
+      <tr><td>Probability-mass delta</td><td class="num">0.0000298</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>Two NVIDIA GPUs running an identical stack produce different text on 19% of
+  prompts.</strong> Not merely different distributions — different sentences.</p>
+
+  <p>This is the number the industry does not publish, and it reframes the question. Before you
+  can ask whether an Ascend or AMD port is faithful, you have to know what <em>faithful</em> looks
+  like between two cards from the same vendor. It is not zero.</p>
+
+  <h3>It also broke our own threshold, so we are publishing that too</h3>
+
+  <p>We had calibrated the gate at <code>2.2e-03</code> using bfloat16 rounding as a stand-in for
+  two hardware kernels disagreeing. Measured against real silicon:</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>Value</th><th>vs. real noise</th></tr></thead>
+    <tbody>
+      <tr><td>Simulated bf16 noise (what we calibrated on)</td><td class="num">1.29e-03</td><td class="num">95× too small</td></tr>
+      <tr><td>Our published threshold</td><td class="num">2.20e-03</td><td class="num">56× too small</td></tr>
+      <tr><td>A ×1.05 temperature fault</td><td class="num">1.80e-02</td><td class="num">6.8× too small</td></tr>
+      <tr><td><strong>Measured cross-silicon noise</strong></td><td class="num"><strong>1.22e-01</strong></td><td class="num">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>Simulated rounding understated the real effect by 95×.</strong> Worse, genuine
+  cross-silicon variation is <em>larger</em> than a real temperature bug — so top-10 distribution
+  distance cannot tell a correct port on new hardware apart from a broken one.</p>
+
+  <p>We have not widened the threshold to make this pass. A gate loose enough to accept 0.122
+  would wave through a 5% temperature error. The thresholds are left unchanged and documented as
+  failing this comparison, because the honest conclusion is that distribution distance is the
+  wrong signal across hardware. What held was <strong>top-1 agreement (1.000 at every compared
+  position)</strong>, <strong>divergence rate</strong>, and <strong>probability-mass
+  preservation</strong> — and those are what we will build the claim on.</p>
+
+  <p class="mut">Caveat we will not bury: 16 prompts producing 3 divergences is a wide confidence
+  interval. The 19% figure needs a larger corpus before anyone should plan around it.</p>
 
   <h3>Three things we found while calibrating, which we would rather publish than hide</h3>
 
@@ -320,7 +376,50 @@
   </table>
   </div>
 
-  <p>门限设在 <strong>2.2e-03</strong>，即噪声上限与最弱故障的几何平均值，两侧各留 <strong>1.7 倍</strong>裕度。与其暗示我们拥有更高的精度，不如把话说清楚：<strong>低于约 1% 的温度参数误差，已处于本门限的检出极限之外。</strong></p>
+  <p class="mut">上述故障幅度，是相对于一次<em>模拟</em>的正确迁移测得的——即对 A40 自身输出施加 bfloat16 舍入。我们随后用两块真实 GPU 检验了这个模拟，它没有通过。见下文。</p>
+
+  <h2>首次真实跨硬件实测</h2>
+
+  <p>NVIDIA A40（Ampere）对比 NVIDIA RTX 6000 Ada。同一厂商、同为 48&nbsp;GB、同一 vLLM 镜像、同一 <code>Qwen3-8B</code>、同一随机种子，两端均已预热且各自逐比特可复现。唯一的变量是芯片。</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>指标</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>输出文本完全一致</td><td class="num">13 / 16 条</td></tr>
+      <tr><td><strong>输出文本不同</strong></td><td class="num"><strong>3 / 16 条</strong></td></tr>
+      <tr><td>Top-1 token 一致率（分叉之前）</td><td class="num">1.000</td></tr>
+      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.122</td></tr>
+      <tr><td>概率质量偏差</td><td class="num">0.0000298</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>两块 NVIDIA GPU、完全相同的软件栈，在 19% 的提示词上产生了不同的文本。</strong>不只是分布不同——是句子不同。</p>
+
+  <p>这正是业界没有公开的数字，而它重新定义了问题本身：在追问昇腾或 AMD 的迁移是否忠实之前，必须先知道同一厂商两块卡之间的"忠实"是什么样子。答案不是零。</p>
+
+  <h3>它同时推翻了我们自己的门限，这一点我们也一并公开</h3>
+
+  <p>我们此前以 bfloat16 舍入代替"两套硬件 kernel 的差异"来校准门限，定在 <code>2.2e-03</code>。以真实芯片衡量：</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>数值</th><th>相对真实噪声</th></tr></thead>
+    <tbody>
+      <tr><td>模拟 bf16 噪声（我们的校准依据）</td><td class="num">1.29e-03</td><td class="num">小 95 倍</td></tr>
+      <tr><td>我们公布的门限</td><td class="num">2.20e-03</td><td class="num">小 56 倍</td></tr>
+      <tr><td>×1.05 温度参数故障</td><td class="num">1.80e-02</td><td class="num">小 6.8 倍</td></tr>
+      <tr><td><strong>实测跨芯片噪声</strong></td><td class="num"><strong>1.22e-01</strong></td><td class="num">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>模拟舍入把真实效应低估了 95 倍。</strong>更关键的是，真实的跨芯片差异<em>大于</em>一个真实的温度参数缺陷——因此 top-10 分布距离无法区分"迁移到新硬件后依然正确"与"迁移出错"。</p>
+
+  <p>我们没有为了让它通过而放宽门限。宽到能容下 0.122 的门限，会放行 5% 的温度参数误差。门限维持原值，并如实记录其在本次比对中判定失败——因为诚实的结论是：跨硬件场景下，分布距离本身就是错误的信号。真正稳住的是 <strong>Top-1 一致率（所有比对位置均为 1.000）</strong>、<strong>分叉率</strong>与<strong>概率质量守恒</strong>，我们将据此构建结论。</p>
+
+  <p class="mut">不回避的局限：16 条提示词中出现 3 次分叉，置信区间很宽。19% 这个数字需要更大的语料支撑，任何人都不应据此直接做规划。</p>
 
   <h3>校准过程中的三个发现——我们宁愿公开，也不愿隐去</h3>
 

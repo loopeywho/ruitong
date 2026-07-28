@@ -76,6 +76,40 @@ def main() -> int:
         n = min(len(entry["top_tokens"]), len(other["top_tokens"]))
         if n == 0:
             continue
+
+        # Truncate at the first divergent SAMPLED token. Past that point the
+        # two backends are continuing different sentences, so position i on one
+        # side and position i on the other describe unrelated contexts and any
+        # distance between them measures the divergence, not the hardware.
+        # Comparing them anyway pins every diverged prompt at 1.0 and drags the
+        # aggregate to a number that says nothing.
+        sa, sb = entry["sampled_tokens"], other["sampled_tokens"]
+        divergence: int | None = None
+        for i in range(min(n, len(sa), len(sb))):
+            if sa[i] != sb[i]:
+                divergence = i
+                break
+        usable = n if divergence is None else divergence
+        if usable == 0:
+            # Diverged on the very first token — nothing is comparable, but the
+            # divergence itself is the finding and must not be dropped silently.
+            rows.append(
+                {
+                    "prompt": entry["prompt"],
+                    "positions": 0,
+                    "text_identical": False,
+                    "tokens_identical": False,
+                    "diverged_at": 0,
+                    "token_matched_prob_diff": None,
+                    "topk_max_abs_diff": None,
+                    "probability_mass_delta": None,
+                    "top1_agreement": None,
+                    "top5_set_agreement": None,
+                }
+            )
+            continue
+
+        n = usable
         ta, la = entry["top_tokens"][:n], entry["top_logprobs"][:n]
         tb, lb = other["top_tokens"][:n], other["top_logprobs"][:n]
         rows.append(
@@ -83,7 +117,8 @@ def main() -> int:
                 "prompt": entry["prompt"],
                 "positions": n,
                 "text_identical": entry["text"] == other["text"],
-                "tokens_identical": entry["sampled_tokens"] == other["sampled_tokens"],
+                "tokens_identical": sa == sb,
+                "diverged_at": divergence,
                 "token_matched_prob_diff": token_matched_prob_diff(ta, la, tb, lb, k=10),
                 "topk_max_abs_diff": top_k_max_abs_diff(la, lb, k=10),
                 "probability_mass_delta": abs(probability_mass(la) - probability_mass(lb)),
@@ -98,11 +133,16 @@ def main() -> int:
 
     # Worst case, never mean: a mean lets one catastrophic prompt average into
     # silence and makes the gate weaker the more prompts you add.
-    worst_prob = max(r["token_matched_prob_diff"] for r in rows)
-    worst_mass = max(r["probability_mass_delta"] for r in rows)
-    worst_top1 = min(r["top1_agreement"] for r in rows)
-    worst_top5 = min(r["top5_set_agreement"] for r in rows)
-    worst_topk = max(r["topk_max_abs_diff"] for r in rows)
+    scored = [r for r in rows if r["token_matched_prob_diff"] is not None]
+    diverged = [r for r in rows if r["diverged_at"] is not None]
+    if not scored:
+        print("REFUSED: every prompt diverged on its first token.", file=sys.stderr)
+        return 2
+    worst_prob = max(r["token_matched_prob_diff"] for r in scored)
+    worst_mass = max(r["probability_mass_delta"] for r in scored)
+    worst_top1 = min(r["top1_agreement"] for r in scored)
+    worst_top5 = min(r["top5_set_agreement"] for r in scored)
+    worst_topk = max(r["topk_max_abs_diff"] for r in scored)
 
     print("=== Ruitong Equivalence Report (corpus comparison) ===")
     print(f"Model:      {ref['model']}")
@@ -112,6 +152,11 @@ def main() -> int:
     print(
         f"Identical output text: "
         f"{sum(1 for r in rows if r['text_identical'])}/{len(rows)}"
+    )
+    print(f"Diverged token stream: {len(diverged)}/{len(rows)}")
+    print(
+        "Metrics below are computed only over positions BEFORE any divergence "
+        "— past that point the two backends are continuing different sentences."
     )
     print()
 
@@ -132,11 +177,14 @@ def main() -> int:
     print()
 
     print("Per prompt (worst first):")
-    for r in sorted(rows, key=lambda r: -r["token_matched_prob_diff"])[:20]:
-        flag = "same-text" if r["text_identical"] else "TEXT DIFFERS"
+    for r in sorted(rows, key=lambda r: -(r["token_matched_prob_diff"] or 0)):
+        flag = "same-text" if r["text_identical"] else f"DIVERGED@{r['diverged_at']}"
+        value = (
+            "   n/a     " if r["token_matched_prob_diff"] is None
+            else f"{r['token_matched_prob_diff']:.9f}"
+        )
         print(
-            f"  Δp={r['token_matched_prob_diff']:.9f}  pos={r['positions']:>3}  "
-            f"{flag:<12} | {r['prompt'][:44]}"
+            f"  Δp={value}  cmp={r['positions']:>3}  {flag:<14} | {r['prompt'][:42]}"
         )
 
     return 0 if passed else 1

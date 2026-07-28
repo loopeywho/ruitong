@@ -203,3 +203,85 @@ claim remains unevidenced.
 
 Verified: 212 passed, mypy clean, sensitivity suite mutation-tested (removing
 the warm-up pass fails 2 tests; widening the threshold to 0.1 fails 4).
+
+---
+
+## D10 — Real cross-silicon measurement invalidates the D9 threshold
+
+**2026-07-28 · first two-GPU comparison.** NVIDIA A40 (Ampere) vs NVIDIA RTX
+6000 Ada, both 48 GB, both `vllm/vllm-openai:latest` from the same RunPod
+template, same `Qwen/Qwen3-8B`, `temperature=0, seed=1234`, both captured warm
+and both bit-exact on their own warm repeat (16/16 each). The only variable is
+the silicon.
+
+### Result
+
+| | |
+|---|---|
+| Identical output text | **13/16** |
+| Diverged token stream | **3/16** |
+| Worst token-matched Δprob (pre-divergence) | **0.1224** |
+| Top-1 agreement (pre-divergence) | **1.000** |
+| Top-5 set agreement | 0.917 |
+| Probability-mass delta | 0.0000298 |
+
+**Two NVIDIA GPUs running an identical stack produce different text on 19% of
+prompts.** Not different distributions — different sentences.
+
+### What this does to the D9 gate
+
+| | value | ratio to real noise |
+|---|---|---|
+| simulated bf16 noise (D9 calibration basis) | 1.29e-03 | 95× too small |
+| `TOKEN_MATCHED_PROB_DIFF_MAX` threshold | 2.20e-03 | 56× too small |
+| weakest injected fault (1% temperature error) | 3.66e-03 | 33× too small |
+| scale ×1.05 fault | 1.80e-02 | 6.8× too small |
+| **measured cross-silicon noise** | **1.22e-01** | — |
+
+Real cross-silicon noise is **6.8× larger than a ×1.05 scaling fault.** So
+`token_matched_prob_diff` cannot separate a *correct* port onto different
+silicon from a genuine temperature bug. Its noise and fault distributions
+overlap, exactly as `top_k_max_abs_diff`'s did in D9 — one level up.
+
+**bf16 rounding is not a valid proxy for two hardware kernels disagreeing.**
+It understates the real effect by ~95×. Every threshold derived from it —
+D7's and D9's — was derived from the wrong distribution. This is the third
+metric retired by measurement, and the second threshold invalidated by
+getting closer to real hardware.
+
+### What survived
+
+- **Top-1 agreement = 1.000.** The argmax agreed at *every* compared position
+  on *every* prompt. Where the models diverge, they diverge by picking a
+  different token at a near-tie — not by disagreeing about what is likely.
+- **Probability-mass delta = 3e-05**, four orders below its 0.01 tolerance,
+  and still moves ~0.023 under a ×1.05 scaling fault. It remains a working
+  scaling-fault detector.
+
+### Decision
+
+**Do not re-tune `TOKEN_MATCHED_PROB_DIFF_MAX` to 0.15 and call it fixed.**
+That would buy a gate that passes a ×1.05 temperature bug. The honest reading
+is that top-10 distribution distance is *not the discriminating signal across
+hardware* — legitimate silicon variation swamps it.
+
+The claim the product can defend, on this evidence, is:
+
+1. **Top-1 agreement at every position before divergence** — held at 1.000.
+2. **Divergence rate** — 3/16 here; the number a customer actually feels.
+3. **Probability-mass preservation** — catches the scaling class independently.
+
+Thresholds are therefore left **unchanged and known-wrong** rather than
+silently widened, and the gate is documented as failing this comparison. A
+threshold change needs a larger corpus than 16 prompts: 3 divergences gives a
+confidence interval far too wide to set a limit on.
+
+### Cost and honesty note
+
+Two pods, ~25 minutes, well under $1. The finding that the whole D9
+calibration rested on a 95×-optimistic proxy was worth more than every
+synthetic experiment before it. Boss pushed for this after noticing the RunPod
+balance had barely moved — the spend was low precisely because only one GPU
+had ever been rented, and one GPU cannot measure a port.
+
+Reproduce: `python tools/compare_corpora.py corpora/a40_v3.json corpora/rtx6000ada.json`

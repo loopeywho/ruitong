@@ -1,0 +1,34 @@
+=== Ruitong Equivalence Report (corpus comparison) ===
+Model:      Qwen/Qwen3-8B
+Reference:  cuda-a40-qwen3-8b-v3
+Candidate:  cuda-rtx6000ada-qwen3-8b
+Prompts:    16 compared
+Identical output text: 13/16
+Diverged token stream: 3/16
+Metrics below are computed only over positions BEFORE any divergence — past that point the two backends are continuing different sentences.
+
+Token-matched prob diff [GATE]:  0.122442606  <= 0.0022     FAIL
+Prob-mass delta         [GATE]:  0.000029849  <= 0.01       PASS
+Top-1 agreement         [GATE]:  1.000000000  >= 0.99       PASS
+Top-5 set agreement     [GATE]:  0.916666667  >= 0.95       FAIL
+Top-k max abs diff      (reported):     1.062500
+
+VERDICT: FAIL — not equivalent
+
+Per prompt (worst first):
+  Δp=0.122442606  cmp= 26  same-text      | Write a haiku about rain.
+  Δp=0.074245004  cmp= 44  same-text      | Explain recursion to a beginner in two sen
+  Δp=0.063032455  cmp= 62  same-text      | What year did the Apollo 11 mission land o
+  Δp=0.061029137  cmp= 64  same-text      | What is the difference between a list and 
+  Δp=0.060282832  cmp= 64  same-text      | What is 17 multiplied by 23?
+  Δp=0.057078927  cmp= 16  DIVERGED@16    | In one sentence, what is photosynthesis?
+  Δp=0.054935510  cmp= 35  same-text      | Name three primary colours.
+  Δp=0.046349759  cmp= 64  same-text      | Explain what a transformer model is, brief
+  Δp=0.046246349  cmp= 64  same-text      | What does the acronym GPU stand for?
+  Δp=0.034378326  cmp= 25  same-text      | List the first five prime numbers.
+  Δp=0.028844158  cmp= 41  DIVERGED@41    | Summarise the water cycle in two sentences
+  Δp=0.028773783  cmp= 24  same-text      | 用一句话解释什么是机器学习。
+  Δp=0.016145035  cmp=  4  same-text      | Translate 'good morning' into Mandarin Chi
+  Δp=0.000011291  cmp= 11  same-text      | Give the chemical symbol for gold.
+  Δp=0.000010042  cmp=  8  same-text      | What is the capital of France? Answer in o
+  Δp=   n/a       cmp=  0  DIVERGED@0     | Write one line of Python that reverses a s

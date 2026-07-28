@@ -1,5 +1,14 @@
 # 瑞通 Ruitong — Equivalence Gate Calibration
 
+> **⚠️ SUPERSEDED IN PART BY DECISIONS.md D10 (2026-07-28).**
+> The threshold below (`2.2e-03`) was calibrated on **simulated** bf16
+> rounding. A real two-GPU comparison — NVIDIA A40 vs RTX 6000 Ada, identical
+> stack — measured cross-silicon noise at **0.122**, i.e. **95× larger** than
+> the simulated proxy and **6.8× larger than a ×1.05 scaling fault**. The gate
+> as calibrated fails every correct port between two NVIDIA cards.
+> Findings 1–3 below still hold. **Finding 4's threshold does not.**
+> Do not quote `2.2e-03` as a validated tolerance.
+
 **Measured on real hardware, 2026-07-27.** This replaces the synthetic
 calibration that preceded it (see git history for the superseded version — its
 numbers are retired and must not be quoted). The standing caveat in
@@ -130,10 +139,10 @@ and is the obvious next improvement.
 
 ## What is still unproven
 
-- Every number here comes from **one GPU, one model, one vendor**. bf16
-  rounding is a *proxy* for two hardware kernels disagreeing, not the real
-  thing. Until the same corpus is captured from a genuinely different backend,
-  the noise ceiling remains an estimate.
+- ~~Every number here comes from one GPU... the noise ceiling remains an
+  estimate.~~ **Resolved 2026-07-28, and the estimate was wrong by 95×.** See
+  D10: measured cross-silicon noise is 0.122, not 1.29e-03. bf16 rounding is
+  not a valid proxy for two hardware kernels disagreeing.
 - **No Ascend hardware has been touched.** The CUDA↔Ascend claim the product
   exists to make is not yet evidenced.
 - Faults are injected, not organic. A real broken port may fail in ways this
