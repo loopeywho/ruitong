@@ -97,6 +97,21 @@ def _build_parser() -> argparse.ArgumentParser:
             "shell history and process listings."
         ),
     )
+    # The two sides are, by definition, different clusters — a CUDA host and an
+    # Ascend host are never one deployment and rarely share a credential. A
+    # single shared key only ever works in a demo.
+    port_parser.add_argument(
+        "--reference-api-key",
+        default=os.environ.get("RUITONG_REF_API_KEY"),
+        help="Bearer token for the reference endpoint only. Defaults to "
+        "$RUITONG_REF_API_KEY, then --api-key.",
+    )
+    port_parser.add_argument(
+        "--candidate-api-key",
+        default=os.environ.get("RUITONG_CAND_API_KEY"),
+        help="Bearer token for the candidate endpoint only. Defaults to "
+        "$RUITONG_CAND_API_KEY, then --api-key.",
+    )
     port_parser.add_argument(
         "--output", default=None, help="Write the JSON report to this path"
     )
@@ -116,6 +131,9 @@ def _make_backends(
     cuda_endpoint: str | None,
     ascend_endpoint: str | None,
     api_key: str | None = None,
+    *,
+    reference_api_key: str | None = None,
+    candidate_api_key: str | None = None,
 ) -> tuple[Backend, Backend, bool]:
     """Return (reference, candidate, synthetic).
 
@@ -126,12 +144,20 @@ def _make_backends(
     synthetic = cuda_endpoint is None or ascend_endpoint is None
 
     cuda: Backend = (
-        VllmHttpBackend(name="cuda", base_url=cuda_endpoint, api_key=api_key)
+        VllmHttpBackend(
+            name="cuda",
+            base_url=cuda_endpoint,
+            api_key=reference_api_key or api_key,
+        )
         if cuda_endpoint
         else FakeCuda(model_ids=[model])
     )
     ascend: Backend = (
-        VllmHttpBackend(name="ascend", base_url=ascend_endpoint, api_key=api_key)
+        VllmHttpBackend(
+            name="ascend",
+            base_url=ascend_endpoint,
+            api_key=candidate_api_key or api_key,
+        )
         if ascend_endpoint
         else FakeAscend(model_ids=[model])
     )
@@ -222,15 +248,24 @@ def _run_port(args: argparse.Namespace) -> int:
                 "comparing an endpoint with itself certifies nothing"
             )
         reference = VllmHttpBackend(
-            name=ref_name, base_url=ref_url, api_key=args.api_key
+            name=ref_name,
+            base_url=ref_url,
+            api_key=args.reference_api_key or args.api_key,
         )
         target = VllmHttpBackend(
-            name=cand_name, base_url=cand_url, api_key=args.api_key
+            name=cand_name,
+            base_url=cand_url,
+            api_key=args.candidate_api_key or args.api_key,
         )
         synthetic = False
     else:
         cuda, ascend, synthetic = _make_backends(
-            model, args.cuda_endpoint, args.ascend_endpoint, args.api_key
+            model,
+            args.cuda_endpoint,
+            args.ascend_endpoint,
+            args.api_key,
+            reference_api_key=args.reference_api_key,
+            candidate_api_key=args.candidate_api_key,
         )
         # The target is the side being ported TO; the other is the reference.
         # Self-comparison is structurally impossible here — a backend compared
