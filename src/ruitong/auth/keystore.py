@@ -1,23 +1,21 @@
 """SQLite-backed, thread-safe API key store.
 
-Follows the same singleton pattern as JobStore: a reentrant lock guards all
-SQLite access and a class-level ``default()`` classmethod provides a
-module-level singleton for convenience.
+The store is file-backed by default (``ruitong-keys.db`` in the CWD).
+Pass ``:memory:`` explicitly for test isolation.
 """
 from __future__ import annotations
 
-import hmac
+import hashlib
 import secrets
 import sqlite3
 import threading
-from datetime import datetime, timezone
 from typing import Any
 
 
 class KeyStore:
     """Thread-safe, SQLite-backed API key store.
 
-    Each key is stored as an HMAC-SHA256 digest.  The plaintext key is
+    Each key is stored as a SHA-256 digest.  The plaintext key is
     returned *only* at creation time (like GitHub's SSH-key setup).
 
     The store is file-backed by default (``ruitong-keys.db`` in the CWD).
@@ -28,7 +26,7 @@ class KeyStore:
 
     @classmethod
     def default(cls) -> KeyStore:
-        """Return the module-level singleton (in-memory when no path set)."""
+        """Return the module-level singleton (``ruitong-keys.db`` in the CWD)."""
         if cls._default_instance is None:
             cls._default_instance = cls()
         return cls._default_instance
@@ -78,27 +76,22 @@ class KeyStore:
         """
         key_id = secrets.token_hex(16)  # 32-char hex
         plaintext = f"rt_{secrets.token_hex(24)}"  # rt_ + 48 hex chars
-        key_hash = hmac.new(
+        key_hash = hashlib.sha256(
             plaintext.encode("utf-8"),
-            b"",
-            "sha256",
         ).hexdigest()
-        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             self._conn.execute(
                 """INSERT INTO api_keys (key_id, key_hash, name, prefix, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (key_id, key_hash, name, plaintext[:11], now),
+                   VALUES (?, ?, ?, ?, datetime('now'))""",
+                (key_id, key_hash, name, plaintext[:11]),
             )
             self._conn.commit()
         return key_id, plaintext
 
     def authenticate(self, provided_key: str) -> str | None:
         """Return the key_id if *provided_key* is valid and active, else ``None``."""
-        candidate_hash = hmac.new(
+        candidate_hash = hashlib.sha256(
             provided_key.encode("utf-8"),
-            b"",
-            "sha256",
         ).hexdigest()
         with self._lock:
             row = self._conn.execute(
@@ -132,14 +125,13 @@ class KeyStore:
 
     def update_last_used(self, key_id: str) -> None:
         """Mark the given key as recently used — debounced to ~5 min."""
-        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             self._conn.execute(
-                """UPDATE api_keys SET last_used_at = ?
+                """UPDATE api_keys SET last_used_at = datetime('now')
                    WHERE key_id = ?
                      AND (last_used_at IS NULL
                           OR last_used_at < datetime('now', '-5 minutes'))""",
-                (now, key_id),
+                (key_id,),
             )
             self._conn.commit()
 

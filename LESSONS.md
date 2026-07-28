@@ -390,6 +390,32 @@ when no path is given.  Tests must now pass `:memory:` explicitly for isolation.
 otherwise a server restart is a data-loss event.  Use `:memory:` only as an
 explicit test parameter (`KeyStore(":memory:")`).
 
+### Post-commit fix: F1 — debounce stored one format, compared another
+
+**Context:** Boss's own audit of `auth/` (written before he saw mine) caught the
+same `update_last_used` time-format bug.  His report is `QA_AUTH_AUDIT.md`.
+I fixed F1 after reconciling with his report.
+
+**Bug:** `update_last_used` stored timestamps with Python
+`datetime.now(timezone.utc).isoformat()` (ISO-8601 with `T` separator:
+`2026-07-28T01:00:00+00:00`) but compared against SQLite's built-in
+`datetime('now','-5 minutes')` (space-separated: `2026-07-28 13:01:12`).
+String comparison made `T > ' '`, so every same-day stored value sorted
+*greater* than the cutoff and the WHERE clause never fired — the debounce only
+worked across calendar days.
+
+**Fix:** let SQLite own both sides — store with `datetime('now')`, compare
+against `datetime('now', '-5 minutes')`. No Python timestamp formatting.
+
+**Also:** replaced `hmac.new(plaintext.encode(), b"", "sha256")` with
+`hashlib.sha256(plaintext.encode()).hexdigest()` — the HMAC had no
+server-side secret and was deterministic anyway. Boss's audit (F2) confirmed
+an unsalted hash is acceptable for 192-bit random tokens and the misleading
+HMAC call was worse.
+
+**Also:** removed unused `datetime` import; fixed `default()` docstring that
+still said "in-memory when no path set".
+
 ## [2026-07-28] claude — Left a GPU billing for 12.6 hours while blocked on a human
 **What:** deployed an RTX 6000 Ada pod, then could not read its API key because
 RunPod's console stopped rendering. I flagged the $0.84/hr burn, offered to
