@@ -82,6 +82,20 @@ class TestPortEndpoint:
         assert "warnings" in data
         assert "thresholds" in data
 
+    def test_port_includes_calibrated_metrics(self, client: TestClient) -> None:
+        """Response includes calibrated metrics and thresholds (P3.6)."""
+        resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
+        data = resp.json()
+        metric_names = {m["name"] for m in data["metrics"]}
+        # Calibrated metrics should be present
+        assert "token_matched_prob_diff" in metric_names
+        assert "topk_max_abs_diff" in metric_names
+        assert "probability_mass_delta" in metric_names
+        # Calibrated thresholds should be present
+        assert "token_matched_prob_diff_max" in data["thresholds"]
+        assert "topk_max_abs_diff_max" in data["thresholds"]
+        assert "prob_mass_tolerance" in data["thresholds"]
+
 
 class TestPortPreviewEndpoint:
     """POST /v1/port/preview — async job submission."""

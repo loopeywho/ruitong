@@ -60,6 +60,9 @@ def _report_to_response(report: EquivalenceReport, validation_level: str = "simu
         PortMetric(name="top1_agreement", value=m.get("top1_agreement")),
         PortMetric(name="top5_set_agreement", value=m.get("top5_set_agreement")),
         PortMetric(name="response_parity", value=m.get("response_parity")),
+        PortMetric(name="token_matched_prob_diff", value=m.get("token_matched_prob_diff")),
+        PortMetric(name="topk_max_abs_diff", value=m.get("topk_max_abs_diff")),
+        PortMetric(name="probability_mass_delta", value=m.get("probability_mass_delta")),
     ]
     per_prompt = [
         PerPromptMetric(
@@ -70,6 +73,9 @@ def _report_to_response(report: EquivalenceReport, validation_level: str = "simu
             top1_agreement=r.top1_agreement,
             top5_set_agreement=r.top5_set_agreement,
             response_parity=r.response_parity,
+            token_matched_prob_diff=r.token_matched_prob_diff,
+            topk_max_abs_diff=r.topk_max_abs_diff,
+            probability_mass_delta=r.probability_mass_delta,
         )
         for r in report.per_prompt_results
     ]
@@ -87,6 +93,9 @@ def _report_to_response(report: EquivalenceReport, validation_level: str = "simu
             "max_abs_diff_max": report.thresholds_used.MAX_ABS_DIFF_MAX,
             "top1_min": report.thresholds_used.TOP1_MIN,
             "top5_min": report.thresholds_used.TOP5_MIN,
+            "token_matched_prob_diff_max": report.thresholds_used.TOKEN_MATCHED_PROB_DIFF_MAX,
+            "topk_max_abs_diff_max": report.thresholds_used.TOPK_MAX_ABS_DIFF_MAX,
+            "prob_mass_tolerance": report.thresholds_used.PROB_MASS_TOLERANCE,
         },
     )
 

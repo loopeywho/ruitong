@@ -63,6 +63,10 @@ class PerPromptMetric(BaseModel):
     top1_agreement: float | None = None
     top5_set_agreement: float | None = None
     response_parity: float | None = None
+    # Calibrated metrics (D9)
+    token_matched_prob_diff: float | None = None
+    topk_max_abs_diff: float | None = None
+    probability_mass_delta: float | None = None
 
 
 class PortReport(BaseModel):
