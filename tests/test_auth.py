@@ -152,166 +152,153 @@ class TestAdminAPI:
     """Admin API endpoint tests — requires admin_key = "admin-secret"."""
 
     ENV_VARS = {"RUITONG_ADMIN_KEY": "admin-secret", "RUITONG_API_KEY": "legacy-key"}
+    KEY_DB_PATH = ":memory:"
 
     def _setup_client(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-        """Set up env vars, reload app, wire an in-memory KeyStore into app state."""
         for k, v in self.ENV_VARS.items():
             monkeypatch.setenv(k, v)
-        monkeypatch.delenv("RUITONG_KEY_DB_PATH", raising=False)
+        monkeypatch.setenv("RUITONG_KEY_DB_PATH", self.KEY_DB_PATH)
 
         import ruitong.main
 
         importlib.reload(ruitong.main)
-
-        # Wire an in-memory KeyStore into app state (lifespan doesn't run
-        # under TestClient, so we do it manually).
-        ruitong.main.app.state.key_store = KeyStore(":memory:")
-        ruitong.main.app.state.config = ruitong.main.BridgeConfig.from_env()
 
         return TestClient(ruitong.main.app)
 
     def test_create_key_returns_plaintext(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Create key returns key_id, plaintext_key, and name."""
-        client = self._setup_client(monkeypatch)
-
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "my-key"},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert "key_id" in data
-        assert "plaintext_key" in data
-        assert data["plaintext_key"].startswith("rt_")
-        assert data["name"] == "my-key"
+        with self._setup_client(monkeypatch) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "my-key"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert "key_id" in data
+            assert "plaintext_key" in data
+            assert data["plaintext_key"].startswith("rt_")
+            assert data["name"] == "my-key"
 
     def test_create_key_rejects_empty_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Empty name returns 422 (P2.5)."""
-        client = self._setup_client(monkeypatch)
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": ""},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 422, resp.text
+        with self._setup_client(monkeypatch) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": ""},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 422, resp.text
 
     def test_create_key_rejects_long_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Name > 128 chars returns 422 (P2.5)."""
-        client = self._setup_client(monkeypatch)
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "x" * 129},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 422, resp.text
+        with self._setup_client(monkeypatch) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "x" * 129},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 422, resp.text
 
     def test_create_key_rejects_unknown_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unknown fields in body return 422 (P2.5)."""
-        client = self._setup_client(monkeypatch)
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "valid-key", "extra_field": "bad"},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 422, resp.text
+        with self._setup_client(monkeypatch) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "valid-key", "extra_field": "bad"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 422, resp.text
 
     def test_list_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """List keys returns all keys with metadata."""
-        client = self._setup_client(monkeypatch)
+        with self._setup_client(monkeypatch) as client:
+            # Create a key first
+            client.post(
+                "/v1/admin/keys",
+                json={"name": "listed-key"},
+                headers={"X-API-Key": "admin-secret"},
+            )
 
-        # Create a key first
-        client.post(
-            "/v1/admin/keys",
-            json={"name": "listed-key"},
-            headers={"X-API-Key": "admin-secret"},
-        )
-
-        resp = client.get("/v1/admin/keys", headers={"X-API-Key": "admin-secret"})
-        assert resp.status_code == 200, resp.text
-        keys = resp.json()
-        assert len(keys) >= 1
-        assert any(k["name"] == "listed-key" for k in keys)
+            resp = client.get("/v1/admin/keys", headers={"X-API-Key": "admin-secret"})
+            assert resp.status_code == 200, resp.text
+            keys = resp.json()
+            assert len(keys) >= 1
+            assert any(k["name"] == "listed-key" for k in keys)
 
     def test_admin_rejects_non_admin_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-admin (regular) key gets 403 on admin endpoints."""
-        client = self._setup_client(monkeypatch)
+        with self._setup_client(monkeypatch) as client:
+            # Create a regular KeyStore key using admin
+            create_resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "regular-user"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert create_resp.status_code == 200
+            regular_key = create_resp.json()["plaintext_key"]
 
-        # Create a regular KeyStore key using admin
-        create_resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "regular-user"},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert create_resp.status_code == 200
-        regular_key = create_resp.json()["plaintext_key"]
-
-        # Use the regular key on admin endpoint → should get 403
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "should-fail"},
-            headers={"X-API-Key": regular_key},
-        )
-        assert resp.status_code == 403, resp.text
+            # Use the regular key on admin endpoint → should get 403
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "should-fail"},
+                headers={"X-API-Key": regular_key},
+            )
+            assert resp.status_code == 403, resp.text
 
     def test_admin_rejects_missing_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Admin endpoints reject requests without key (401)."""
-        client = self._setup_client(monkeypatch)
-
-        resp = client.get("/v1/admin/keys")
-        # No key header → auth middleware rejects with 401
-        assert resp.status_code == 401
+        with self._setup_client(monkeypatch) as client:
+            resp = client.get("/v1/admin/keys")
+            # No key header → auth middleware rejects with 401
+            assert resp.status_code == 401
 
     def test_revoke_key_via_admin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Delete /v1/admin/keys/{key_id} revokes a key."""
-        client = self._setup_client(monkeypatch)
+        with self._setup_client(monkeypatch) as client:
+            # Create a key
+            create_resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "to-revoke"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            key_id = create_resp.json()["key_id"]
 
-        # Create a key
-        create_resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "to-revoke"},
-            headers={"X-API-Key": "admin-secret"},
-        )
-        key_id = create_resp.json()["key_id"]
-
-        # Revoke it
-        resp = client.delete(
-            f"/v1/admin/keys/{key_id}",
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["revoked"] is True
+            # Revoke it
+            resp = client.delete(
+                f"/v1/admin/keys/{key_id}",
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["revoked"] is True
 
     def test_revoke_nonexistent_key_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Revoking a non-existent key returns 404."""
-        client = self._setup_client(monkeypatch)
-
-        resp = client.delete(
-            "/v1/admin/keys/nonexistent-id",
-            headers={"X-API-Key": "admin-secret"},
-        )
-        assert resp.status_code == 404
+        with self._setup_client(monkeypatch) as client:
+            resp = client.delete(
+                "/v1/admin/keys/nonexistent-id",
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 404
 
     def test_admin_disabled_when_no_admin_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Admin endpoint returns 503 when RUITONG_ADMIN_KEY is not set."""
         monkeypatch.delenv("RUITONG_ADMIN_KEY", raising=False)
         monkeypatch.delenv("RUITONG_API_KEY", raising=False)
+
         import ruitong.main
 
         importlib.reload(ruitong.main)
-        ruitong.main.app.state.key_store = KeyStore(":memory:")
-        ruitong.main.app.state.config = ruitong.main.BridgeConfig.from_env()
 
-        client = TestClient(ruitong.main.app)
-
-        resp = client.post(
-            "/v1/admin/keys",
-            json={"name": "any-key"},
-            headers={"X-API-Key": "some-key"},
-        )
-        # Admin API is disabled — 503
-        assert resp.status_code == 503, resp.text
-        assert "not set" in resp.text
+        with TestClient(ruitong.main.app) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "any-key"},
+                headers={"X-API-Key": "some-key"},
+            )
+            # Admin API is disabled — 503
+            assert resp.status_code == 503, resp.text
+            assert "not set" in resp.text
 
 
 # ── Auth middleware end-to-end tests ──────────────────────────────────
@@ -329,14 +316,13 @@ class TestAuthMiddleware:
         importlib.reload(ruitong.main)
         from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/health")
+            # Health is exempt — should 200
+            assert resp.status_code == 200
 
-        resp = client.get("/v1/health")
-        # Health is exempt — should 200
-        assert resp.status_code == 200
-
-        resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
-        assert resp.status_code == 401
+            resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
+            assert resp.status_code == 401
 
     def test_with_valid_legacy_key_returns_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Valid legacy key is accepted."""
@@ -347,14 +333,13 @@ class TestAuthMiddleware:
         importlib.reload(ruitong.main)
         from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-
-        resp = client.post(
-            "/v1/port",
-            json={"model": "Qwen3-8B"},
-            headers={"X-API-Key": "legacy-123"},
-        )
-        assert resp.status_code == 200, resp.text
+        with TestClient(ruitong.main.app) as client:
+            resp = client.post(
+                "/v1/port",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": "legacy-123"},
+            )
+            assert resp.status_code == 200, resp.text
 
     def test_admin_mode_with_key_store_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """KeyStore key authenticates regular endpoints."""
@@ -365,11 +350,10 @@ class TestAuthMiddleware:
         importlib.reload(ruitong.main)
         from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-
-        # Without admin_key, we fall back to api_key which is empty — anonymous
-        resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
-        assert resp.status_code == 200, resp.text
+        with TestClient(ruitong.main.app) as client:
+            # Without admin_key, we fall back to api_key which is empty — anonymous
+            resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
+            assert resp.status_code == 200, resp.text
 
     def test_with_valid_key_returns_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Valid X-API-Key header is accepted."""
@@ -380,13 +364,12 @@ class TestAuthMiddleware:
         importlib.reload(ruitong.main)
         from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-
-        resp = client.post(
-            "/v1/port",
-            json={"model": "Qwen3-8B"},
-            headers={"X-API-Key": "test-key-123"},
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-        assert data["validation_level"] == "simulated"
+        with TestClient(ruitong.main.app) as client:
+            resp = client.post(
+                "/v1/port",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": "test-key-123"},
+            )
+            assert resp.status_code == 200, resp.text
+            data = resp.json()
+            assert data["validation_level"] == "simulated"

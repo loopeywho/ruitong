@@ -16,12 +16,11 @@ class TestPricingList:
         monkeypatch.delenv("RUITONG_PRICING", raising=False)
         import ruitong.main
         importlib.reload(ruitong.main)
-        from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-        resp = client.get("/v1/pricing")
-        assert resp.status_code == 200
-        assert resp.json() == []
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing")
+            assert resp.status_code == 200
+            assert resp.json() == []
 
     def test_returns_configured_pricing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With RUITONG_PRICING set, returns configured pricing list."""
@@ -35,16 +34,15 @@ class TestPricingList:
         monkeypatch.setenv("RUITONG_PRICING", pricing)
         import ruitong.main
         importlib.reload(ruitong.main)
-        from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-        resp = client.get("/v1/pricing")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert len(data) == 1
-        assert data[0]["model"] == "Qwen3-8B"
-        assert data[0]["currency"] == "CNY"
-        assert data[0]["tier"] == "standard"
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["model"] == "Qwen3-8B"
+            assert data[0]["currency"] == "CNY"
+            assert data[0]["tier"] == "standard"
 
 
 class TestPricingModel:
@@ -67,16 +65,14 @@ class TestPricingModel:
         monkeypatch.setenv("RUITONG_PRICING", pricing)
         import ruitong.main
         importlib.reload(ruitong.main)
-        from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-
-        resp = client.get("/v1/pricing/Qwen3-8B")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["model"] == "Qwen3-8B"
-        assert data["currency"] == "CNY"
-        assert data["tier"] == "standard"
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing/Qwen3-8B")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["model"] == "Qwen3-8B"
+            assert data["currency"] == "CNY"
+            assert data["tier"] == "standard"
 
     def test_unknown_model_returns_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unknown model returns 404."""
@@ -90,12 +86,10 @@ class TestPricingModel:
         monkeypatch.setenv("RUITONG_PRICING", pricing)
         import ruitong.main
         importlib.reload(ruitong.main)
-        from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-
-        resp = client.get("/v1/pricing/unknown-model")
-        assert resp.status_code == 404
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing/unknown-model")
+            assert resp.status_code == 404
 
 
 class TestPricingEmpty:
@@ -106,8 +100,7 @@ class TestPricingEmpty:
         monkeypatch.delenv("RUITONG_PRICING", raising=False)
         import ruitong.main
         importlib.reload(ruitong.main)
-        from fastapi.testclient import TestClient
 
-        client = TestClient(ruitong.main.app)
-        resp = client.get("/v1/pricing/any-model")
-        assert resp.status_code == 404
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing/any-model")
+            assert resp.status_code == 404
