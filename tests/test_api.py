@@ -207,6 +207,138 @@ class TestCrossTenantIsolation:
             )
             assert a_read.status_code == 200
 
+    def test_cross_tenant_list_isolation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Key B's list does not include key A's jobs."""
+        import importlib
+
+        for k, v in self.ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.setenv("RUITONG_KEY_DB_PATH", ":memory:")
+
+        import ruitong.main
+
+        importlib.reload(ruitong.main)
+
+        with TestClient(ruitong.main.app) as client:
+            # Create two keys
+            resp_a = client.post(
+                "/v1/admin/keys",
+                json={"name": "key-a"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp_a.status_code == 200
+            key_a = resp_a.json()["plaintext_key"]
+
+            resp_b = client.post(
+                "/v1/admin/keys",
+                json={"name": "key-b"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp_b.status_code == 200
+            key_b = resp_b.json()["plaintext_key"]
+
+            # Key A submits two jobs
+            job_a1 = client.post(
+                "/v1/port/preview",
+                json={"model": "model-1"},
+                headers={"X-API-Key": key_a},
+            ).json()["job_id"]
+            job_a2 = client.post(
+                "/v1/port/preview",
+                json={"model": "model-2"},
+                headers={"X-API-Key": key_a},
+            ).json()["job_id"]
+
+            # Key B submits one job
+            job_b1 = client.post(
+                "/v1/port/preview",
+                json={"model": "model-3"},
+                headers={"X-API-Key": key_b},
+            ).json()["job_id"]
+
+            # Key A's list should have 2 jobs
+            a_list = client.get(
+                "/v1/port/preview",
+                headers={"X-API-Key": key_a},
+            )
+            assert a_list.status_code == 200
+            a_jobs = {j["job_id"] for j in a_list.json()}
+            assert a_jobs == {job_a1, job_a2}
+
+            # Key B's list should have 1 job (not A's jobs)
+            b_list = client.get(
+                "/v1/port/preview",
+                headers={"X-API-Key": key_b},
+            )
+            assert b_list.status_code == 200
+            b_jobs = {j["job_id"] for j in b_list.json()}
+            assert b_jobs == {job_b1}
+            assert job_a1 not in b_jobs
+            assert job_a2 not in b_jobs
+
+    def test_cross_tenant_delete_returns_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Key B cannot delete key A's job — gets 404."""
+        import importlib
+
+        for k, v in self.ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.setenv("RUITONG_KEY_DB_PATH", ":memory:")
+
+        import ruitong.main
+
+        importlib.reload(ruitong.main)
+
+        with TestClient(ruitong.main.app) as client:
+            # Create two keys
+            resp_a = client.post(
+                "/v1/admin/keys",
+                json={"name": "key-a"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            key_a = resp_a.json()["plaintext_key"]
+
+            resp_b = client.post(
+                "/v1/admin/keys",
+                json={"name": "key-b"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            key_b = resp_b.json()["plaintext_key"]
+
+            # Key A submits a job
+            job_id = client.post(
+                "/v1/port/preview",
+                json={"model": "Qwen3-8B"},
+                headers={"X-API-Key": key_a},
+            ).json()["job_id"]
+
+            # Key B tries to delete key A's job — must get 404
+            b_delete = client.delete(
+                f"/v1/port/preview/{job_id}",
+                headers={"X-API-Key": key_b},
+            )
+            assert b_delete.status_code == 404
+
+            # Key A can still read the job (it wasn't deleted)
+            a_read = client.get(
+                f"/v1/port/preview/{job_id}",
+                headers={"X-API-Key": key_a},
+            )
+            assert a_read.status_code == 200
+
+            # Key A can delete their own job
+            a_delete = client.delete(
+                f"/v1/port/preview/{job_id}",
+                headers={"X-API-Key": key_a},
+            )
+            assert a_delete.status_code == 204
+
+            # Job is now gone
+            a_read_after = client.get(
+                f"/v1/port/preview/{job_id}",
+                headers={"X-API-Key": key_a},
+            )
+            assert a_read_after.status_code == 404
+
 
 class TestAuthMiddleware:
     """API key authentication."""

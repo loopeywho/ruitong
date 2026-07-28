@@ -221,3 +221,33 @@ async def get_port_job(job_id: str, request: Request) -> JobInfo:
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
+
+
+@router.get("/preview", response_model=list[JobInfo])
+async def list_port_jobs(request: Request) -> list[JobInfo]:
+    """List all jobs owned by the authenticated principal.
+
+    Returns only jobs belonging to the caller — cross-tenant list is
+    impossible by design (R2 fix).
+    """
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        store = JobStore.default()
+    owner = _principal(request)
+    return store.list_by_owner(owner)
+
+
+@router.delete("/preview/{job_id}", status_code=204)
+async def delete_port_job(job_id: str, request: Request) -> None:
+    """Delete a job owned by the authenticated principal.
+
+    Returns 404 if the job doesn't exist or belongs to another tenant
+    (R2 fix — cross-tenant delete is impossible).
+    """
+    store = getattr(request.app.state, "job_store", None)
+    if store is None:
+        store = JobStore.default()
+    owner = _principal(request)
+    deleted = store.delete(job_id, owner=owner)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
