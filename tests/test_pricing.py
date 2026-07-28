@@ -7,6 +7,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import ruitong.main
+
 
 class TestPricingList:
     """GET /v1/pricing — list all pricing."""
@@ -104,3 +106,58 @@ class TestPricingEmpty:
         with TestClient(ruitong.main.app) as client:
             resp = client.get("/v1/pricing/any-model")
             assert resp.status_code == 404
+
+
+class TestPricingAuth:
+    """Pricing endpoints require auth when RUITONG_API_KEY is set."""
+
+    API_KEY = "test-api-key"
+    PRICING_JSON = json.dumps({
+        "Qwen3-8B": {
+            "name": "standard",
+            "price_per_input_token_cny": 0.0007,
+            "price_per_output_token_cny": 0.0028,
+        }
+    })
+
+    def _setup(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUITONG_API_KEY", self.API_KEY)
+        monkeypatch.delenv("RUITONG_ADMIN_KEY", raising=False)
+        monkeypatch.setenv("RUITONG_PRICING", self.PRICING_JSON)
+        importlib.reload(ruitong.main)
+
+    def test_list_requires_auth(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /v1/pricing returns 401 without X-API-Key header."""
+        self._setup(monkeypatch)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing")
+            assert resp.status_code == 401
+
+    def test_model_requires_auth(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /v1/pricing/{model} returns 401 without X-API-Key header."""
+        self._setup(monkeypatch)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing/Qwen3-8B")
+            assert resp.status_code == 401
+
+    def test_list_with_valid_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /v1/pricing returns 200 with valid X-API-Key header."""
+        self._setup(monkeypatch)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get("/v1/pricing", headers={"X-API-Key": self.API_KEY})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert len(data) == 1
+            assert data[0]["model"] == "Qwen3-8B"
+
+    def test_model_with_valid_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """GET /v1/pricing/{model} returns 200 with valid X-API-Key header."""
+        self._setup(monkeypatch)
+        with TestClient(ruitong.main.app) as client:
+            resp = client.get(
+                "/v1/pricing/Qwen3-8B",
+                headers={"X-API-Key": self.API_KEY},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["model"] == "Qwen3-8B"
