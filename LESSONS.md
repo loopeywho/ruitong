@@ -436,3 +436,33 @@ genuinely short — and even then, say the deadline out loud.
 11x, because I reasoned from *my* elapsed turns rather than from wall-clock
 timestamps. Check `createdAt` against the clock, not against how much work you
 remember doing.
+
+## [2026-07-28] claude — Audited a tree while the other agent was writing it
+**What:** started auditing Kimi's round while Kimi was still committing. `main.py`,
+`config.py` and `router.py` all changed mid-audit. I ran `git stash push` to isolate
+my changes and it swept up Kimi's uncommitted work too; on `pop` the two were mixed.
+I then chased a `BridgeConfig is not defined` error and a set of 4 test failures,
+and was about to report them as defects in Kimi's commit — until I stashed my own
+changes and found the tree was **green without me**. The failures were mine.
+**Why wrong:** my own Round-4 rule says *audit a frozen tree*. I read it, wrote it
+down, and then did the opposite because the work looked ready.
+**Rule:** audit a **SHA**, never a working tree. Before reporting any failure in
+someone else's work, remove your own changes and re-run — if it goes green, the
+defect is yours. And agree explicit round boundaries with the other agent
+("round complete, SHA xxxxxxx") rather than inferring readiness from activity.
+
+## [2026-07-28] claude — Generalised a metric's sensitivity from one synthetic row
+**What:** checked whether `-inf` logprobs (vllm-ascend#2934) evade the gate, using a
+hand-written row where rank 1 held a confident token. It scored 0.0498 — loudly
+detected — so I concluded the -inf bug "is not silent" and drafted a correction
+telling Kimi their severity analysis was wrong.
+**Why wrong:** my synthetic row was not shaped like real output. Measured against the
+captured corpus, detectability spans ~10⁴×: 0.500 at rank 1 on the worst prompt, but
+**3.5e-05** on a confident prompt like "What is the capital of France?" — far below the
+2.2e-03 gate, i.e. genuinely silent. Kimi was closer to right than my correction.
+**What saved it:** the test I wrote to *prove my own claim* failed. I had asserted
+`score > threshold` and got 3.5e-05.
+**Rule:** the same trap as Round 5 (synthetic fixtures agreeing with themselves), now
+in an *audit* rather than in code. **Before correcting someone else, measure your
+correction against real captured data** — a hand-made example proves only that the
+example behaves that way. And write the assertion that could embarrass you.
