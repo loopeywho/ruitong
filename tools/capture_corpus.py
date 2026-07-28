@@ -43,6 +43,65 @@ PROMPTS = [
     "What year did the Apollo 11 mission land on the Moon?",
     "Write a haiku about rain.",
     "What is the difference between a list and a tuple in Python?",
+    # ── Extension to ~60 (R5, 2026-07-28). The 16 prompts above are frozen —
+    # past corpora were captured with exactly that list, and changing any of
+    # them silently breaks comparability. Additions are biased toward genuine
+    # near-ties (open-ended generation, arbitrary-order lists, subjective
+    # description), because D10 showed that is where cross-silicon divergence
+    # actually happens: 3/16 diverged, all three on open-ended prompts.
+    # ── open-ended generation / creative (highest divergence pressure) ──
+    "Write a two-line poem about the sea.",
+    "Describe the smell of fresh bread in one sentence.",
+    "Invent a name for a coffee shop and explain it in one sentence.",
+    "Write the opening sentence of a detective novel.",
+    "Give a metaphor for time, in one sentence.",
+    "Describe autumn to someone who has never seen it, in two sentences.",
+    "Write a one-sentence toast for a wedding.",
+    "Suggest a title for a documentary about ants.",
+    # ── arbitrary-order lists (near-ties by construction) ──
+    "Name four fruits.",
+    "List three European capital cities.",
+    "Name two famous physicists.",
+    "List three uses for a paperclip.",
+    "Name three programming languages.",
+    "List four animals commonly kept as pets.",
+    # ── short factual (control group — should rarely diverge) ──
+    "What is the boiling point of water in Celsius at sea level?",
+    "How many days are there in a leap year?",
+    "What planet is known as the Red Planet?",
+    "What is the chemical formula for water?",
+    "Who wrote Romeo and Juliet?",
+    "What is the square root of 144?",
+    # ── code generation ──
+    "Write a Python function that returns the factorial of n.",
+    "Write one line of Python that sums a list of numbers.",
+    "Show a SQL query that counts rows in a table called orders.",
+    "Write a Python list comprehension that squares the numbers 1 to 10.",
+    "What does the following do: `x[::-1]` in Python? One sentence.",
+    # ── multi-step reasoning ──
+    "A train leaves at 09:10 and arrives at 11:45. How long is the journey?",
+    "If a shirt costs $20 after a 20% discount, what was the original price?",
+    "I have 3 boxes with 12 eggs each and use 7 eggs. How many remain?",
+    "Which is larger: 2 to the power of 10, or 10 to the power of 3?",
+    "If today is Wednesday, what day is it in 100 days?",
+    # ── 中文 ──
+    "用两句话解释什么是区块链。",
+    "写一首关于秋天的五言绝句。",
+    "列举三个中国的省份。",
+    "用一句话描述早茶文化。",
+    "把「熟能生巧」翻译成英文并解释。",
+    "简述粤语和普通话的一个主要区别。",
+    # ── translation (both directions) ──
+    "Translate 'The weather is beautiful today' into French.",
+    "Translate '我今天很忙' into English.",
+    "Translate 'thank you very much' into Japanese.",
+    "Translate 'Der Hund schläft unter dem Tisch' into English.",
+    # ── longer generation (more positions per prompt) ──
+    "Explain in three sentences why the sky is blue.",
+    "Summarise the plot of Cinderella in three sentences.",
+    "Describe how to make a cup of tea, step by step, in four steps.",
+    "Explain the difference between weather and climate in two sentences.",
+    "Give three tips for learning a new language, one sentence each.",
 ]
 
 

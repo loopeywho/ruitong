@@ -135,7 +135,7 @@ Document in `DEPLOYMENT.md` that any pre-`d668f58` keystore must be recreated.
 **Acceptance:** a test with a row written under the old HMAC scheme asserts a
 clear refusal, not a confusing auth failure.
 
-## R5 — Widen the prompt corpus 🟢 no GPU needed
+## R5 — Widen the prompt corpus ✅ DONE (Claude, 2026-07-28, Boss reassigned)
 
 The headline finding — 19% of prompts diverge across two NVIDIA GPUs — rests on
 **3 divergences in 16 prompts**. That confidence interval is far too wide for
@@ -146,9 +146,9 @@ existing 16 unchanged so past corpora stay comparable. Spread across:
 short factual, long generation, code, reasoning, 中文, and translation. Bias
 toward prompts with genuine near-ties (that is where divergence happens).
 
-**Acceptance:** `python tools/capture_corpus.py --help` still runs, the first 16
-prompts are byte-identical to now, and you have **not** touched
-`corpora/*.json` — those are captured measurements, never edited by hand.
+**Done:** 61 prompts; first-16 sha256 verified byte-identical
+(`7a2045b3…`); `--help` runs; `corpora/` untouched. Kimi: nothing to do here —
+the next capture run will use the wider list automatically.
 
 ---
 
