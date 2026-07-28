@@ -52,6 +52,24 @@ def main() -> int:
     ref_path, cand_path = sys.argv[1], sys.argv[2]
     ref, cand = _load(ref_path), _load(cand_path)
 
+    # --subset-of FILE restricts the comparison to prompts also present in an
+    # earlier corpus. Needed for an honest like-for-like: the corpus was
+    # widened from 16 to 61 prompts (R5) with the additions deliberately
+    # biased toward near-ties, since that is where cross-silicon divergence
+    # was observed. A raw rate from the wider set is therefore NOT comparable
+    # to the 19% published from the original 16 — quoting it as an increase
+    # would be measuring our own prompt selection.
+    subset_label = ""
+    if "--subset-of" in sys.argv:
+        base_path = sys.argv[sys.argv.index("--subset-of") + 1]
+        allowed = {e["prompt"] for e in _load(base_path)["entries"]}
+        before = len(ref["entries"])
+        ref["entries"] = [e for e in ref["entries"] if e["prompt"] in allowed]
+        subset_label = (
+            f"  [subset: {len(ref['entries'])} of {before} prompts, "
+            f"those also in {os.path.basename(base_path)}]"
+        )
+
     if ref["model"] != cand["model"]:
         print(
             f"REFUSED: different models ({ref['model']} vs {cand['model']}). "
@@ -148,7 +166,7 @@ def main() -> int:
     print(f"Model:      {ref['model']}")
     print(f"Reference:  {ref['label']}")
     print(f"Candidate:  {cand['label']}")
-    print(f"Prompts:    {len(rows)} compared")
+    print(f"Prompts:    {len(rows)} compared{subset_label}")
     print(
         f"Identical output text: "
         f"{sum(1 for r in rows if r['text_identical'])}/{len(rows)}"
