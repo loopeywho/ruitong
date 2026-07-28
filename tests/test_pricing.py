@@ -161,3 +161,27 @@ class TestPricingAuth:
             assert resp.status_code == 200
             data = resp.json()
             assert data["model"] == "Qwen3-8B"
+
+
+class TestPricingConfigValidation:
+    """Malformed RUITONG_PRICING must fail loudly (P2.6)."""
+
+    def test_malformed_json_raises_from_env(self) -> None:
+        """BridgeConfig.from_env raises ValueError on malformed JSON."""
+        import os
+
+        os.environ["RUITONG_PRICING"] = "not even json"
+        try:
+            from ruitong.config import BridgeConfig
+            with pytest.raises(ValueError, match="RUITONG_PRICING must be valid JSON"):
+                BridgeConfig.from_env()
+        finally:
+            os.environ.pop("RUITONG_PRICING", None)
+
+    def test_lifespan_fails_on_malformed_pricing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """App startup (lifespan) fails loudly when pricing is malformed."""
+        monkeypatch.setenv("RUITONG_PRICING", "{broken: json}")
+        importlib.reload(ruitong.main)
+        with pytest.raises((ValueError, RuntimeError)):
+            with TestClient(ruitong.main.app):
+                pass
