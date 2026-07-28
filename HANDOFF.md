@@ -1,12 +1,79 @@
-# Handoff — Claude → Qwen / Kimi · 2026-07-27 (updated ~19:30, HEAD `a8722f0`)
+# Handoff — Claude → Kimi (RedStar) · updated 2026-07-28 ~20:25, HEAD `9a8bc4c`
 
-**Division of labour (Boss, 2026-07-27):** Claude audits and sets direction. Qwen and Kimi build.
-Their edge is what sits behind the firewall — Chinese-language CANN documentation, Huawei developer
-forums, Gitee, and mainland resources Claude cannot reach. Route anything needing those to them.
+**Division of labour (Boss):** Claude audits and sets direction. Kimi builds (primary coder on
+RedStar since 2026-07-28). Kimi's edge is what sits behind the firewall — Chinese-language CANN
+documentation, Huawei developer forums, Gitee, and mainland resources Claude cannot reach. Route
+anything needing those to Kimi.
 
 ---
 
-## ⚠️ READ THIS FIRST — the gate you were building against has changed
+## 🔴 READ THIS FIRST — the gate changed AGAIN (D12), and it affects R1
+
+**If you are mid-write on `RESEARCH_ASCEND_LOGPROBS.md`: stop and read this section before
+finishing your severity analysis.** I can see it uncommitted at 252 lines. Your conclusions about
+what an Ascend `-inf` bug *does to our gate* depend on a gate that changed 20 minutes ago.
+
+**`git pull` / rebase onto `9a8bc4c` before continuing.**
+
+### What changed (DECISIONS.md D12)
+
+The gate is now **compound** — three metrics, ANY failing → FAIL:
+
+| metric | threshold | catches |
+|---|---|---|
+| `top1_agreement` | ≥ 0.99 | position shifts |
+| `probability_mass_delta` | ≤ 0.01 | scaling, corruption, argmax collapse |
+| `token_matched_prob_diff` | ≤ **0.4402** (was 0.0022) | value-only corruption at a fixed token position |
+
+`top5_set_agreement` is **demoted to reported-only** — the fourth metric retired by measurement.
+
+### Why this specifically matters to R1
+
+Your committed R1 draft said an Ascend `-inf` bug is dangerous because it would "silently inflate
+divergence" against our comparison. Two corrections, and the second one is mine to own:
+
+1. **It cited `cosine_similarity` and `max_absolute_difference`** as what `EquivalenceRunner`
+   computes. Both were already retired (D7/D9) before you wrote that. Neither gates anything.
+2. **I then told you `-inf` is "not silent" — and I was partly wrong.** I tested that claim on a
+   hand-written row and it scored loudly. Measured against the *real* corpus, detectability spans
+   ~10⁴×: 0.500 at rank 1 on the worst prompt, but **3.5e-05** on a confident prompt like "What is
+   the capital of France?" — genuinely invisible. You were closer to right than my correction was.
+
+**The upshot for your write-up:** `-inf` is neither reliably caught nor reliably missed — it is
+*prompt-dependent*. That is precisely why the runner now **refuses** rather than grades: any
+prompt with a non-finite logprob is marked `mode="unusable"` and excluded from the verdict
+(`count_non_finite`, added in `0d2073e`). Frame the Ascend risk as **"we cannot certify against
+this server"**, not as "it inflates our divergence number".
+
+### The one rule that did NOT change
+
+**Do not widen a threshold to make a failing comparison pass.** `0.0022 → 0.4402` looks like
+loosening; it is not. The old number was anchored to *simulated* bf16 noise, which D10 measured as
+95× too optimistic. The new one is the geometric mean of *measured* real cross-hardware noise
+(0.195) and the weakest fault it must catch (0.993) — 2.26× clear on each side. Every threshold in
+this repo traces to a measurement you can re-run. A PR that changes one without a new measurement
+will be rejected.
+
+### A worked example of the trap, since it nearly caught me
+
+The obvious simplification — drop `token_matched_prob_diff`, gate on the two metrics with perfect
+real-hardware records — **has a hole.** A transposed-operator bug (values scrambled, token
+identity unchanged) moves `top1_agreement` and `probability_mass_delta` by *exactly zero*:
+permuting values within a row changes neither which token sits at rank 0 nor the row's sum. I only
+found it because I tested the simplification against every fault *before* implementing it, on the
+real corpus rather than by reasoning.
+
+Then a mutation test found a second layer: removing `token_matched_prob_diff` from the *real*
+runner's gate broke **no tests at all**, because the sensitivity suite reimplemented the gate
+formula instead of exercising `runner.py`. The suite was testing my arithmetic, not the product.
+Fixed by `TestRunnerGateIntegration`, which drives the actual `EquivalenceRunner` end-to-end.
+
+**Both lessons are the same one:** verify against the real thing, and check that your test would
+actually fail if the code were wrong.
+
+---
+
+## Older notice — superseded by D12 above, kept for context
 
 We rented a real GPU (NVIDIA A40, `Qwen/Qwen3-8B`) for the first time. **It invalidated the
 D7 gate.** If you are holding work that touches `equivalence/`, rebase onto `a8722f0` before
