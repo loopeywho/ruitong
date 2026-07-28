@@ -6,7 +6,8 @@ Maintained by Claude (audit + direction). Boss gates all spend and launches.
 Open items only. History lives in `DECISIONS.md`, `LESSONS.md`, `CALIBRATION.md`
 — read those once, not every round.
 
-**State:** HEAD `d668f58` · 236 tests · mypy clean on 26 files · 80% coverage.
+**State:** code HEAD `d668f58` · 236 tests · mypy clean on 26 files · 80%
+coverage (re-verified 2026-07-28).
 Verify with `uv run --extra dev pytest -q` and `uv run mypy src/ruitong`, and
 quote the real output. Never report a verdict you did not run.
 
@@ -65,7 +66,7 @@ pure garbage.
 **Research, in Chinese, using sources Claude cannot reach:**
 - `vllm-ascend` on Gitee and GitHub — search issues/PRs for `logprobs`,
   `top_logprobs`, `采样`, `对数概率`, `精度`
-- 昇腾社区 (ascend.huawei.com) developer forums
+- 昇腾社区 (hiascend.com) developer forums
 - Any published Ascend-vs-GPU numerical comparison with actual numbers
 
 **Answer these specific questions:**
@@ -88,7 +89,7 @@ renting Ascend time, without opening a single link.
 
 ## R2 — Cross-tenant read on jobs 🔴 security
 
-Your own audit logged this as P1.5 and it is still open. The `jobs` table has
+Logged as P1.5 in the Phase 5 audit (`QA_FINDINGS.md`), still open. The `jobs` table has
 no owner column. Now that multi-key auth exists (`auth/keystore.py`), **any
 authenticated customer can read any other customer's job** by guessing or
 enumerating an id.
@@ -101,19 +102,24 @@ no live key matches (never to "everyone").
 keys, create a job under key A, then assert key B gets **404** (not 403 — do
 not confirm the id exists) for get, and that it does not appear in B's list.
 
-## R3 — `/v1/port/comparison` returns `passed: true` for self-comparison 🔴
+## R3 — `POST /v1/port` certifies a self-comparison 🔴
 
-Your P1.6, still open. The CLI refuses this (`cli.py` rejects same name *and*
-same URL — "a backend compared with itself always agrees and certifies
-nothing"). The HTTP endpoint does not. **A false pass is the worst defect this
-product can ship**, because the whole value is the trust claim.
+P1.6 from the same audit, still open. Real surface (read the router first —
+an earlier draft cited a `/v1/port/comparison` route that does not exist):
+`POST /v1/port` and `/v1/port/preview` take `target ∈ {cuda, ascend, auto}`;
+for `cuda` or `ascend`, `_make_runner` (`src/ruitong/api/router.py`) builds
+`EquivalenceRunner(backend, backend)` — the *same instance* both sides — and
+returns `passed: true`. The CLI refuses exactly this (exit 2, D8); the API
+certifies it. **A false pass is the worst defect this product can ship.**
 
-**Fix:** mirror the CLI's refusal in the API. Reject identical endpoints with
-422, and never return `passed: true` from a comparison that made no real
-comparison.
+**Fix:** reject `target="cuda"`/`"ascend"` with 422 on both routes; never
+return `passed: true` from a comparison that made no real comparison.
+(`target="auto"` compares two distinct backends and stays; the fakes behind
+it are R6/P2.13's problem.)
 
-**Acceptance:** a test posting the same URL as both reference and candidate
-asserts a 4xx and that no report with `passed: true` is produced.
+**Acceptance:** the existing tests asserting a single-target port returns a
+passing report are *replaced* by tests asserting 422 and that no report with
+`passed: true` is produced (`QA_FINDINGS.md` T1 #9).
 
 ## R4 — Keystore hash migration note 🟠 small but sharp
 
@@ -148,8 +154,9 @@ prompts are byte-identical to now, and you have **not** touched
 
 ## R6 — remaining P2s, in this order 🟡 after R1–R4
 
-Your open P2 list, re-ranked by what actually protects the product. Do them
-top-down; stop and report rather than rushing the tail:
+The Phase 5 audit's open P2 list (`QA_FINDINGS.md` tail), re-ranked by what
+actually protects the product. Do them top-down; stop and report rather than
+rushing the tail:
 
 1. **P2.7 — global `"anonymous"` bucket.** With auth disabled, every client
    shares one rate-limit bucket: one noisy user exhausts it for everyone, and
@@ -172,7 +179,14 @@ top-down; stop and report rather than rushing the tail:
    a monetary bug, silently.
 7. **P2.8 — audit logging.** Log admin-API actions (key created/revoked, by
    which principal, when) to stderr/structured log. No new dependencies.
-8. **P2.13 — carryovers.** Fake backends still registered in `main.py`
+8. **P3.6, promoted — the API report quotes only retired metrics.**
+   `_report_to_response` emits `cosine_similarity` and `max_absolute_difference`
+   — both retired by D9/D10 — and omits the metrics that actually gate, so a
+   consumer cannot see why `passed` is what it is. Per D3/D5 the report *is*
+   the product; a report built from dead numbers is a trust bug, not polish.
+   Sync the response models to `report.metrics` and `Thresholds` as defined in
+   `equivalence/` — mirror them exactly, do not redefine them (my lane).
+9. **P2.13 — carryovers.** Fake backends still registered in `main.py`
    lifespan; job concurrency cap; orphaned tasks. Take the fake-backend one
    first: production serving fabricated responses is the oldest open finding
    in this repo (Phase 2 audit).
@@ -189,7 +203,9 @@ an open security finding is misordered work.
 | `CALIBRATION.md`, `DECISIONS.md` | `QA_FINDINGS.md`, `DEPLOYMENT.md` |
 | thresholds and metric definitions | `RESEARCH_ASCEND_LOGPROBS.md` |
 
-If a task needs a file in my lane, say so in your report instead of editing it.
+Exception: the `PROMPTS` list in `tools/capture_corpus.py` is yours for R5;
+the capture logic around it stays mine. Any other file in my lane: say so in
+your report instead of editing it.
 
 ## Non-negotiable rules
 
