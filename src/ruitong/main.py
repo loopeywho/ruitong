@@ -61,7 +61,11 @@ async def lifespan(app: FastAPI):
     app.state.pricing_config = config.pricing_config
     app.state.rate_limit_buckets = {}  # dict[str, list[float]]
     app.state.rate_limit_counter = 0
-    app.state.background_tasks: set[asyncio.Task] = set()  # track for cleanup
+    # Annotate the local, then assign. `app.state.x: T = ...` is a syntax
+    # Python accepts but mypy rejects — annotations are only permitted on
+    # names and self attributes, not arbitrary attribute targets.
+    background_tasks: set[asyncio.Task] = set()  # track for cleanup
+    app.state.background_tasks = background_tasks
     yield
     # Cancel background tasks on shutdown (P2.13 — orphaned tasks)
     for task in app.state.background_tasks:

@@ -225,3 +225,104 @@ class TestProbabilityMassStillGuards:
             )
         assert worst <= Thresholds.PROB_MASS_TOLERANCE
         assert not math.isnan(worst)
+
+
+class _StubBackend:
+    """Minimal backend returning one position with a fixed logprob."""
+
+    def __init__(self, name: str, logprob: float) -> None:
+        self.name = name
+        self._logprob = logprob
+
+    async def health(self):  # pragma: no cover
+        raise NotImplementedError
+
+    async def list_models(self):  # pragma: no cover
+        raise NotImplementedError
+
+    async def chat(self, req):
+        from ruitong.schemas import (
+            ChatResponse, Choice, ChoiceLogprobs, LogprobEntry,
+            Message, TopLogprob, Usage,
+        )
+        return ChatResponse(
+            id="x", model="m", backend=self.name,
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            choices=[Choice(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="stop",
+                logprobs=ChoiceLogprobs(content=[LogprobEntry(
+                    token="hi", logprob=self._logprob,
+                    top_logprobs=[
+                        TopLogprob(token="hi", logprob=self._logprob),
+                        TopLogprob(token="yo", logprob=-5.0),
+                    ],
+                )]),
+            )],
+        )
+
+    async def stream(self, req):  # pragma: no cover
+        raise NotImplementedError
+        yield  # type: ignore[unreachable]
+
+
+class TestNonFiniteLogprobsAreRefused:
+    """A server emitting -inf/NaN is a SERVER defect, not a port defect.
+
+    `vllm-ascend` 0.9.1 on Qwen3-8B emits excessive -inf where the same model
+    on GPU does not (vllm-ascend#2934); vLLM on ROCm returns -9999 sentinels
+    (vllm#19305). Both would otherwise condemn a *correct* port.
+
+    Note the failure mode is the opposite of the one first supposed: -inf is
+    NOT silent against the current gate, because exp(-inf) is 0.0 and the
+    resulting probability gap is large. The risk is a false FAIL, not a false
+    PASS — which is why these are refused rather than graded.
+    """
+
+    def test_inf_is_detected(self) -> None:
+        from ruitong.equivalence.metrics import count_non_finite
+
+        assert count_non_finite([[-0.1, -3.0]]) == 0
+        assert count_non_finite([[-0.1, float("-inf")]]) == 1
+        assert count_non_finite([[float("nan"), -3.0]]) == 1
+
+    def test_inf_detection_is_prompt_dependent(self, corpus) -> None:
+        """Why refusing beats grading: detection depends on the prompt.
+
+        Corrupting rank 1 scores 5.0e-01 on the worst prompt in the corpus —
+        loudly over the 2.2e-03 gate — but only 3.5e-05 on a highly confident
+        prompt like "What is the capital of France?", where rank 1 already
+        carries almost no probability mass. So whether an upstream -inf bug is
+        caught depends on which prompts happen to be in the suite.
+
+        A detector whose sensitivity varies by two orders of magnitude with
+        the input is not something to gate on. Refuse instead.
+        """
+        def corrupt_rank1(entry):
+            t, l = entry["top_tokens"], entry["top_logprobs"]
+            c = [
+                [float("-inf") if i == 1 else v for i, v in enumerate(row)]
+                for row in l
+            ]
+            return token_matched_prob_diff(t, l, t, c, k=10)
+
+        scores = [corrupt_rank1(e) for e in corpus]
+        assert max(scores) > Thresholds.TOKEN_MATCHED_PROB_DIFF_MAX
+        assert min(scores) < Thresholds.TOKEN_MATCHED_PROB_DIFF_MAX, (
+            "if every prompt caught it, grading would be safe and the "
+            "refuse-instead guard would be unnecessary"
+        )
+
+    async def test_runner_refuses_rather_than_grading(self) -> None:
+        """The whole point: mode becomes 'unusable', not a pass/fail verdict."""
+        from ruitong.equivalence.runner import EquivalenceRunner
+
+        runner = EquivalenceRunner(
+            _StubBackend("a", -0.1), _StubBackend("b", float("-inf"))
+        )
+        report = await runner.run("m", ["p"])
+
+        assert report.per_prompt_results[0].mode == "unusable"
+        assert not report.passed, "must not certify against a faulty server"
+        assert any("Non-finite" in w for w in report.warnings)

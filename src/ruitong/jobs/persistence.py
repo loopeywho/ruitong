@@ -83,21 +83,29 @@ class JobStore:
             )
             self._conn.commit()
 
-    def get(self, job_id: str, owner: str = "") -> JobInfo | None:
-        """Fetch a job by ID, or None if not found.
+    def get(self, job_id: str, owner: str) -> JobInfo | None:
+        """Fetch a job owned by *owner*, or None.
 
-        When *owner* is non-empty, scopes the lookup so only the owning
-        principal can see the job (returns None for cross-tenant reads).
+        `owner` is required and the query is ALWAYS scoped — there is no
+        unscoped mode. The previous signature defaulted to `owner=""` and
+        treated empty as "read any job", so a caller that forgot the argument
+        silently read every tenant's data. Verified: a job owned by "alice"
+        was returned for `get(job_id, owner="")`.
+
+        Nothing needed that branch — the sole caller (`api/router.py`) always
+        passes an owner — so it was dead code whose only effect was to make the
+        failure mode of this security control "allow everything". Middleware
+        order in this app has been wrong before (H2), so a control that opens
+        when a value goes missing is not defensible.
+
+        An empty owner now matches only rows literally owned by `''` — the
+        migration sentinel for pre-ownership jobs, which no live principal can
+        ever equal.
         """
         with self._lock:
-            if owner:
-                row = self._conn.execute(
-                    "SELECT * FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
-                ).fetchone()
-            else:
-                row = self._conn.execute(
-                    "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
-                ).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
+            ).fetchone()
         if row is None:
             return None
         return self._row_to_job(row)

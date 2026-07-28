@@ -44,6 +44,16 @@ def _make_runner(
         )
 
 
+def _principal(request: Request) -> str:
+    """Return the authenticated principal, or empty string for dev mode.
+
+    When auth is configured, `auth_middleware` always sets this — the real
+    key when configured, "anonymous" when not. An empty string means auth
+    is disabled (dev mode) — jobs are not scoped to a tenant.
+    """
+    return getattr(request.state, "api_key_principal", "")
+
+
 def _default_prompts(model: str) -> list[str]:
     return [
         f"What is {model}? Answer in one sentence.",
@@ -151,7 +161,7 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = getattr(request.state, "api_key_principal", "")
+    owner = _principal(request)
     store.create(job, model=req.model, target=req.target, owner=owner)
 
     # Launch background task
@@ -206,7 +216,7 @@ async def get_port_job(job_id: str, request: Request) -> JobInfo:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    owner = getattr(request.state, "api_key_principal", "")
+    owner = _principal(request)
     job = store.get(job_id, owner=owner)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")

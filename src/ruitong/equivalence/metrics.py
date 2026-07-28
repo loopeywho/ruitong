@@ -337,3 +337,29 @@ def token_matched_prob_diff(
             )
             worst = max(worst, abs(prob_a - prob_b))
     return worst
+
+
+def count_non_finite(tensor: list[list[float]]) -> int:
+    """Count logprob entries that are not finite (-inf, +inf, NaN).
+
+    A correct log-softmax never emits these. Their presence means the *server*
+    is faulty, not that the port is wrong — and the two demand opposite
+    responses, which is why the CLI separates exit 1 (gate failed) from exit 2
+    (could not run).
+
+    This is not hypothetical. `vllm-ascend` 0.9.1 serving Qwen3-8B emits
+    excessive `-inf` logprobs where the same model on GPU does not
+    (vllm-ascend issue #2934), and vLLM on ROCm returns `-9999` sentinels
+    (vllm-project/vllm#19305).
+
+    Measured against the current gate, `-inf` is *not* silent: `exp(-inf)` is
+    0.0, so a corrupted entry shows up as a large probability difference
+    (0.0498 for a tail token, 0.951 on the argmax, against a 0.0022
+    threshold). The danger is therefore the opposite of the one first
+    supposed — not a false PASS that certifies a broken port, but a false
+    FAIL that condemns a *correct* port for an upstream sampler defect.
+    Counting them lets the runner say "we could not tell" instead.
+    """
+    return sum(
+        1 for row in tensor for value in row if not math.isfinite(value)
+    )

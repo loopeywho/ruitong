@@ -20,6 +20,7 @@ from .metrics import (
     topk_token_set_agreement,
     top_k_max_abs_diff,
     probability_mass,
+    count_non_finite,
     token_matched_prob_diff,
 )
 
@@ -297,6 +298,36 @@ class EquivalenceRunner:
             )
 
             if logs_a is not None and logs_b is not None:
+                # ── Refuse to grade a server that is emitting garbage ──
+                # A correct log-softmax never emits -inf/+inf/NaN. When one
+                # does, the fault is in the SERVER, not the port — and those
+                # demand opposite responses (D8: exit 1 "the port is broken"
+                # vs exit 2 "we could not tell").
+                #
+                # Real: vllm-ascend 0.9.1 on Qwen3-8B emits excessive -inf
+                # where the same model on GPU does not (vllm-ascend #2934);
+                # vLLM on ROCm returns -9999 sentinels (vllm#19305). Without
+                # this, a *correct* Ascend port is condemned for an upstream
+                # sampler defect — a false FAIL, and an expensive one to
+                # debug because every metric looks plausibly bad.
+                bad_a = count_non_finite(logs_a)
+                bad_b = count_non_finite(logs_b)
+                if bad_a or bad_b:
+                    sides = []
+                    if bad_a:
+                        sides.append(f"{self.backend_a_name}={bad_a}")
+                    if bad_b:
+                        sides.append(f"{self.backend_b_name}={bad_b}")
+                    warnings.append(
+                        f"Non-finite logprobs for prompt '{prompt[:50]}' "
+                        f"({', '.join(sides)}). A correct log-softmax cannot "
+                        f"produce these; this is a server defect, not a port "
+                        f"defect. Not graded. See vllm-ascend#2934."
+                    )
+                    result.mode = "unusable"
+                    per_prompt.append(result)
+                    continue
+
                 # Mode 1: logprob comparison
                 result.mode = "logprob"
                 try:
