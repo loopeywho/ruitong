@@ -121,6 +121,29 @@ class TestKeyStore:
         finally:
             ks.close()
 
+    def test_authenticate_rejects_unknown_hash_scheme(self) -> None:
+        """A row with non-'sha256' hash_scheme is refused (R4)."""
+        ks = KeyStore(":memory:")
+        try:
+            # Insert a row manually with a bogus hash and scheme
+            ks._conn.execute(
+                """INSERT INTO api_keys (key_id, key_hash, name, prefix, hash_scheme, created_at)
+                   VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+                ("test-id", "deadbeef", "old-key", "rt_old", "hmac"),
+            )
+            ks._conn.commit()
+
+            # Should refuse — hash_scheme is not 'sha256'
+            assert ks.authenticate("anything") is None
+
+            # Verify the row still exists (not silently deleted)
+            row = ks._conn.execute(
+                "SELECT key_id FROM api_keys WHERE key_id = ?", ("test-id",)
+            ).fetchone()
+            assert row is not None
+        finally:
+            ks.close()
+
 
 # ── Admin API endpoint tests ──────────────────────────────────────────
 

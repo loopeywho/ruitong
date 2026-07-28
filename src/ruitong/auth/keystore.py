@@ -50,6 +50,7 @@ class KeyStore:
                     key_hash    TEXT NOT NULL,
                     name        TEXT NOT NULL,
                     prefix      TEXT NOT NULL,
+                    hash_scheme TEXT NOT NULL DEFAULT 'sha256',
                     created_at  TEXT NOT NULL,
                     last_used_at TEXT,
                     is_active   INTEGER NOT NULL DEFAULT 1
@@ -81,25 +82,34 @@ class KeyStore:
         ).hexdigest()
         with self._lock:
             self._conn.execute(
-                """INSERT INTO api_keys (key_id, key_hash, name, prefix, created_at)
-                   VALUES (?, ?, ?, ?, datetime('now'))""",
+                 """INSERT INTO api_keys (key_id, key_hash, name, prefix, hash_scheme, created_at)
+                    VALUES (?, ?, ?, ?, 'sha256', datetime('now'))""",
                 (key_id, key_hash, name, plaintext[:11]),
             )
             self._conn.commit()
         return key_id, plaintext
 
     def authenticate(self, provided_key: str) -> str | None:
-        """Return the key_id if *provided_key* is valid and active, else ``None``."""
+        """Return the key_id if *provided_key* is valid and active, else ``None``.
+
+        Refuses to authenticate rows with an unknown ``hash_scheme`` —
+        a pre-d668f58 keystore uses HMAC and would silently mis-verify
+        under SHA-256.
+        """
         candidate_hash = hashlib.sha256(
             provided_key.encode("utf-8"),
         ).hexdigest()
         with self._lock:
             row = self._conn.execute(
-                """SELECT key_id FROM api_keys
+                """SELECT key_id, hash_scheme FROM api_keys
                    WHERE key_hash = ? AND is_active = 1""",
                 (candidate_hash,),
             ).fetchone()
         if row is None:
+            return None
+        if row["hash_scheme"] != "sha256":
+            # Unknown scheme — refuse rather than silently returning
+            # a wrong result. The user must recreate their keystore.
             return None
         self.update_last_used(row["key_id"])
         return row["key_id"]
