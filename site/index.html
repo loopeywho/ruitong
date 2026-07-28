@@ -164,17 +164,30 @@
   <table>
     <thead><tr><th>Measure</th><th>Result</th></tr></thead>
     <tbody>
-      <tr><td>Identical output text</td><td class="num">13 / 16 prompts</td></tr>
-      <tr><td><strong>Different output text</strong></td><td class="num"><strong>3 / 16 prompts</strong></td></tr>
+      <tr><td>Identical output text</td><td class="num">45 / 61 prompts</td></tr>
+      <tr><td><strong>Different output text</strong></td><td class="num"><strong>16 / 61 prompts (26%)</strong></td></tr>
       <tr><td>Top-1 token agreement (before divergence)</td><td class="num">1.000</td></tr>
-      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.122</td></tr>
-      <tr><td>Probability-mass delta</td><td class="num">0.0000298</td></tr>
+      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.195</td></tr>
+      <tr><td>Probability-mass delta</td><td class="num">0.0000791</td></tr>
     </tbody>
   </table>
   </div>
 
-  <p><strong>Two NVIDIA GPUs running an identical stack produce different text on 19% of
-  prompts.</strong> Not merely different distributions — different sentences.</p>
+  <p><strong>Two NVIDIA GPUs running an identical stack produce different text on 26% of
+  prompts</strong> (95% CI 16.8&ndash;38.4%). Not merely different distributions — different
+  sentences.</p>
+
+  <p class="mut">Measured twice on separately rented pods. Restricted to the 16 prompts used in
+  the first run, the second reproduced it to nine decimal places (0.122442606) — so this is a
+  deterministic property of the two GPU models, not an artefact of one rental. Both sides were
+  bit-exact on their own warm repeat, 61/61.</p>
+
+  <p><strong>Divergence tracks output length, not prompt type.</strong> We widened the corpus
+  expecting open-ended prompts to dominate; they did not. Two short factual questions diverged —
+  including &ldquo;What is the chemical formula for water?&rdquo; at 13 generated tokens. Diverged
+  prompts averaged 49 tokens against 41 overall. So the practical guidance is: <em>the longer the
+  generation, the more divergence to expect</em> — a classification workload and a long-form
+  generation workload do not carry the same risk.</p>
 
   <p>This is the number the industry does not publish, and it reframes the question. Before you
   can ask whether an Ascend or AMD port is faithful, you have to know what <em>faithful</em> looks
@@ -208,8 +221,9 @@
   position)</strong>, <strong>divergence rate</strong>, and <strong>probability-mass
   preservation</strong> — and those are what we will build the claim on.</p>
 
-  <p class="mut">Caveat we will not bury: 16 prompts producing 3 divergences is a wide confidence
-  interval. The 19% figure needs a larger corpus before anyone should plan around it.</p>
+  <p class="mut">Caveat we will not bury: 61 prompts still leaves a 95% interval of 16.8&ndash;38.4%.
+  The rate did not measurably change when we went from 16 prompts to 61 — the interval simply
+  narrowed — so treat 26% as an estimate with real uncertainty, not a specification.</p>
 
   <h3>Three things we found while calibrating, which we would rather publish than hide</h3>
 
@@ -386,16 +400,20 @@
   <table>
     <thead><tr><th>指标</th><th>结果</th></tr></thead>
     <tbody>
-      <tr><td>输出文本完全一致</td><td class="num">13 / 16 条</td></tr>
-      <tr><td><strong>输出文本不同</strong></td><td class="num"><strong>3 / 16 条</strong></td></tr>
+      <tr><td>输出文本完全一致</td><td class="num">45 / 61 条</td></tr>
+      <tr><td><strong>输出文本不同</strong></td><td class="num"><strong>16 / 61 条（26%）</strong></td></tr>
       <tr><td>Top-1 token 一致率（分叉之前）</td><td class="num">1.000</td></tr>
-      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.122</td></tr>
-      <tr><td>概率质量偏差</td><td class="num">0.0000298</td></tr>
+      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.195</td></tr>
+      <tr><td>概率质量偏差</td><td class="num">0.0000791</td></tr>
     </tbody>
   </table>
   </div>
 
-  <p><strong>两块 NVIDIA GPU、完全相同的软件栈，在 19% 的提示词上产生了不同的文本。</strong>不只是分布不同——是句子不同。</p>
+  <p><strong>两块 NVIDIA GPU、完全相同的软件栈，在 26% 的提示词上产生了不同的文本</strong>（95% 置信区间 16.8–38.4%）。不只是分布不同——是句子不同。</p>
+
+  <p class="mut">该结果在两次独立租用的实例上分别实测。将第二次结果限定为首次使用的那 16 条提示词时，两次数值精确到小数点后九位完全一致（0.122442606）——因此这是两款 GPU 的确定性差异，而非某一次租用的偶然。两端在各自的预热重复中均逐比特一致（61/61）。</p>
+
+  <p><strong>分叉与输出长度相关，而非提示词类型。</strong>我们在扩充语料时预期开放式生成会占主导，事实并非如此：两条简短事实型问题同样发生分叉——包括「水的化学式是什么？」，仅生成 13 个 token。发生分叉的提示词平均 49 个 token，全部语料平均 41 个。因此实用结论是：<em>生成越长，预期分叉越多</em>——分类类任务与长文本生成任务的风险并不相同。</p>
 
   <p>这正是业界没有公开的数字，而它重新定义了问题本身：在追问昇腾或 AMD 的迁移是否忠实之前，必须先知道同一厂商两块卡之间的"忠实"是什么样子。答案不是零。</p>
 
@@ -419,7 +437,7 @@
 
   <p>我们没有为了让它通过而放宽门限。宽到能容下 0.122 的门限，会放行 5% 的温度参数误差。门限维持原值，并如实记录其在本次比对中判定失败——因为诚实的结论是：跨硬件场景下，分布距离本身就是错误的信号。真正稳住的是 <strong>Top-1 一致率（所有比对位置均为 1.000）</strong>、<strong>分叉率</strong>与<strong>概率质量守恒</strong>，我们将据此构建结论。</p>
 
-  <p class="mut">不回避的局限：16 条提示词中出现 3 次分叉，置信区间很宽。19% 这个数字需要更大的语料支撑，任何人都不应据此直接做规划。</p>
+  <p class="mut">不回避的局限：即便扩充到 61 条，95% 置信区间仍为 16.8–38.4%。从 16 条增加到 61 条时，分叉率并未出现可测量的变化——只是区间收窄了。因此 26% 应被视为带有真实不确定性的估计值，而非规格承诺。</p>
 
   <h3>校准过程中的三个发现——我们宁愿公开，也不愿隐去</h3>
 

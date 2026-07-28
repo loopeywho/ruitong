@@ -285,3 +285,72 @@ balance had barely moved — the spend was low precisely because only one GPU
 had ever been rented, and one GPU cannot measure a port.
 
 Reproduce: `python tools/compare_corpora.py corpora/a40_v3.json corpora/rtx6000ada.json`
+
+---
+
+## D11 — 61-prompt re-run: D10 reproduces exactly; divergence tracks length, not prompt type
+
+**2026-07-28 · second cross-hardware run.** Same pairing as D10 (NVIDIA A40
+Ampere vs NVIDIA RTX 6000 Ada), fresh pods, widened corpus (R5: 16 → 61
+prompts). Cost $0.25, both pods torn down and verified gone.
+
+### 1. The D10 measurement reproduces exactly
+
+Restricting this run to the original 16 prompts (`--subset-of`):
+
+| | D10 run | this run |
+|---|---|---|
+| identical text | 13/16 | **13/16** |
+| diverged | 3/16 | **3/16** |
+| worst token-matched Δprob | 0.122442606 | **0.122442606** |
+
+Nine decimal places, on **different physical pods rented hours apart**. The
+cross-hardware difference is a deterministic property of the two GPU models
+and the software stack, not an artefact of one rental. Both sides were again
+bit-exact on their own warm repeat (61/61 each), so the reference contributes
+zero noise.
+
+### 2. The interval tightened; the rate did not move
+
+| sample | rate | 95% CI (Wilson) |
+|---|---|---|
+| original 16 prompts | 3/16 = 18.8% | [6.6%, 43.0%] |
+| all 61 prompts | 16/61 = **26.2%** | **[16.8%, 38.4%]** |
+
+The intervals overlap heavily and the like-for-like subset is *identical*, so
+**there is no evidence the rate actually rose** — 61 prompts simply measures
+the same thing more precisely. The published figure should be 26% with the
+interval attached, not "19% rose to 26%".
+
+### 3. My hypothesis for widening the corpus was wrong
+
+R5 biased the new prompts toward open-ended generation and arbitrary-order
+lists, on the theory that near-ties are where divergence lives (all three D10
+divergences were open-ended). **The data refutes it.** Two prompts from the
+short-factual *control* group diverged:
+
+- `"How many days are there in a leap year?"`
+- `"What is the chemical formula for water?"` — 13 generated tokens
+
+What actually correlates is **generated length**: diverged prompts averaged
+49.1 tokens against 41.6 across the corpus, and 8 of the 16 divergences ran to
+the 64-token cap. That is a mechanical effect — more tokens sampled means more
+opportunities for a near-tie to flip — not a property of prompt category.
+
+**Consequence for the product:** divergence risk scales with output length, so
+a customer generating long-form text should expect materially more divergence
+than one doing classification. That is a far more useful thing to tell a buyer
+than a single corpus-wide percentage, and it should shape whatever the v1
+report claims.
+
+### Unchanged
+
+- **Top-1 agreement 1.000** across all 61 prompts — the argmax never disagreed
+  at any compared position. Third consecutive run holding.
+- **Probability-mass delta 7.9e-05**, four orders below its 0.01 tolerance.
+- The gate still FAILS (worst Δp 0.195 against 0.0022) and is still
+  **deliberately not widened** — 0.195 is ~11× a ×1.05 temperature fault.
+
+Reproduce:
+`python tools/compare_corpora.py corpora/a40_61.json corpora/rtx6000ada_61.json`
+`… --subset-of corpora/cuda_a40_qwen3_8b.json` for the like-for-like.

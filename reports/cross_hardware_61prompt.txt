@@ -1,0 +1,79 @@
+=== Ruitong Equivalence Report (corpus comparison) ===
+Model:      Qwen/Qwen3-8B
+Reference:  cuda-a40-qwen3-8b-61
+Candidate:  cuda-rtx6000ada-qwen3-8b-61
+Prompts:    61 compared
+Identical output text: 45/61
+Diverged token stream: 16/61
+Metrics below are computed only over positions BEFORE any divergence — past that point the two backends are continuing different sentences.
+
+Token-matched prob diff [GATE]:  0.195113840  <= 0.0022     FAIL
+Prob-mass delta         [GATE]:  0.000079127  <= 0.01       PASS
+Top-1 agreement         [GATE]:  1.000000000  >= 0.99       PASS
+Top-5 set agreement     [GATE]:  0.916666667  >= 0.95       FAIL
+Top-k max abs diff      (reported):     1.062500
+
+VERDICT: FAIL — not equivalent
+
+Per prompt (worst first):
+  Δp=0.195113840  cmp= 55  same-text      | Explain the difference between weather and
+  Δp=0.122459160  cmp= 64  same-text      | Who wrote Romeo and Juliet?
+  Δp=0.122442606  cmp= 26  same-text      | Write a haiku about rain.
+  Δp=0.119600180  cmp= 64  same-text      | Describe autumn to someone who has never s
+  Δp=0.086515935  cmp= 43  DIVERGED@43    | List three uses for a paperclip.
+  Δp=0.074245004  cmp= 44  same-text      | Explain recursion to a beginner in two sen
+  Δp=0.073924173  cmp= 25  DIVERGED@25    | Write a one-sentence toast for a wedding.
+  Δp=0.072395945  cmp= 27  same-text      | Name three programming languages.
+  Δp=0.072331094  cmp= 56  DIVERGED@56    | Summarise the plot of Cinderella in three 
+  Δp=0.069399030  cmp= 22  DIVERGED@22    | How many days are there in a leap year?
+  Δp=0.063488141  cmp= 64  same-text      | Write a Python list comprehension that squ
+  Δp=0.063032455  cmp= 62  same-text      | What year did the Apollo 11 mission land o
+  Δp=0.062323104  cmp= 46  same-text      | 用两句话解释什么是区块链。
+  Δp=0.061029137  cmp= 64  same-text      | What is the difference between a list and 
+  Δp=0.060741508  cmp= 49  same-text      | Name two famous physicists.
+  Δp=0.060306479  cmp= 64  same-text      | Write a Python function that returns the f
+  Δp=0.060290875  cmp= 52  same-text      | Invent a name for a coffee shop and explai
+  Δp=0.060282990  cmp= 29  same-text      | Give a metaphor for time, in one sentence.
+  Δp=0.060282832  cmp= 64  same-text      | What is 17 multiplied by 23?
+  Δp=0.060282808  cmp= 48  same-text      | What is the square root of 144?
+  Δp=0.060025058  cmp= 64  same-text      | If today is Wednesday, what day is it in 1
+  Δp=0.057348150  cmp= 64  same-text      | If a shirt costs $20 after a 20% discount,
+  Δp=0.057078927  cmp= 16  DIVERGED@16    | In one sentence, what is photosynthesis?
+  Δp=0.057074265  cmp= 64  same-text      | Show a SQL query that counts rows in a tab
+  Δp=0.056725116  cmp= 64  same-text      | A train leaves at 09:10 and arrives at 11:
+  Δp=0.056525411  cmp= 47  DIVERGED@47    | Describe how to make a cup of tea, step by
+  Δp=0.054935510  cmp= 35  same-text      | Name three primary colours.
+  Δp=0.052803172  cmp= 28  same-text      | 写一首关于秋天的五言绝句。
+  Δp=0.051878256  cmp= 64  same-text      | I have 3 boxes with 12 eggs each and use 7
+  Δp=0.051820823  cmp= 37  DIVERGED@37    | 简述粤语和普通话的一个主要区别。
+  Δp=0.051717687  cmp= 10  same-text      | Translate 'The weather is beautiful today'
+  Δp=0.050313938  cmp= 20  same-text      | Write one line of Python that sums a list 
+  Δp=0.049106529  cmp= 22  same-text      | 列举三个中国的省份。
+  Δp=0.047323028  cmp= 38  same-text      | What planet is known as the Red Planet?
+  Δp=0.046349759  cmp= 64  same-text      | Explain what a transformer model is, brief
+  Δp=0.046246349  cmp= 64  same-text      | What does the acronym GPU stand for?
+  Δp=0.045736046  cmp= 16  same-text      | List four animals commonly kept as pets.
+  Δp=0.043726196  cmp=  6  DIVERGED@6     | 把「熟能生巧」翻译成英文并解释。
+  Δp=0.042811760  cmp= 36  DIVERGED@36    | Explain in three sentences why the sky is 
+  Δp=0.041033669  cmp= 64  same-text      | Which is larger: 2 to the power of 10, or 
+  Δp=0.036473080  cmp= 57  same-text      | Translate 'thank you very much' into Japan
+  Δp=0.034378326  cmp= 25  same-text      | List the first five prime numbers.
+  Δp=0.031989272  cmp= 20  same-text      | Write a two-line poem about the sea.
+  Δp=0.028844158  cmp= 41  DIVERGED@41    | Summarise the water cycle in two sentences
+  Δp=0.028840490  cmp= 16  same-text      | Name four fruits.
+  Δp=0.028773783  cmp= 24  same-text      | 用一句话解释什么是机器学习。
+  Δp=0.026504838  cmp= 15  same-text      | Suggest a title for a documentary about an
+  Δp=0.016145035  cmp=  4  same-text      | Translate 'good morning' into Mandarin Chi
+  Δp=0.014404027  cmp= 12  same-text      | List three European capital cities.
+  Δp=0.011483086  cmp=  8  DIVERGED@8     | Write the opening sentence of a detective 
+  Δp=0.009786019  cmp= 34  DIVERGED@34    | Give three tips for learning a new languag
+  Δp=0.008014698  cmp= 12  DIVERGED@12    | What is the chemical formula for water?
+  Δp=0.005759296  cmp= 22  same-text      | What does the following do: `x[::-1]` in P
+  Δp=0.003437229  cmp= 13  DIVERGED@13    | Describe the smell of fresh bread in one s
+  Δp=0.000700060  cmp= 19  same-text      | What is the boiling point of water in Cels
+  Δp=0.000331706  cmp=  7  same-text      | Translate '我今天很忙' into English.
+  Δp=0.000057900  cmp=  3  DIVERGED@3     | 用一句话描述早茶文化。
+  Δp=0.000034790  cmp=  9  same-text      | Translate 'Der Hund schläft unter dem Tisc
+  Δp=0.000011291  cmp= 11  same-text      | Give the chemical symbol for gold.
+  Δp=0.000010042  cmp=  8  same-text      | What is the capital of France? Answer in o
+  Δp=   n/a       cmp=  0  DIVERGED@0     | Write one line of Python that reverses a s
