@@ -31,6 +31,17 @@ SWEEP_INTERVAL = 100  # sweep stale entries every N requests
 async def lifespan(app: FastAPI):
     """Create registry, add fakes, create router, init JobStore."""
     config = BridgeConfig.from_env()
+
+    # Warn loudly if auth is off — dev-mode IP-based rate limiting is
+    # better than a shared bucket, but it is not a security boundary.
+    if not config.api_key and not config.admin_key:
+        import logging
+        logging.warning(
+            "RUITONG_API_KEY and RUITONG_ADMIN_KEY are both unset — "
+            "authentication is disabled. Rate limiting keys on client IP. "
+            "Do not expose this server to the internet."
+        )
+
     registry = BackendRegistry(config)
     registry.register("cuda", FakeCuda())
     registry.register("ascend", FakeAscend())
@@ -282,8 +293,10 @@ async def auth_middleware(request: Request, call_next):
             request.state.api_key_principal = provided
 
     else:
-        # No auth configured (dev mode) — all request share "anonymous"
-        request.state.api_key_principal = "anonymous"
+        # No auth configured (dev mode) — do not set api_key_principal,
+        # so rate_limit_middleware keys on IP instead of one shared
+        # "anonymous" bucket that a single noisy user exhausts for everyone.
+        pass  # principal stays unset → IP-based bucket in rate limiter
 
     return await call_next(request)
 
