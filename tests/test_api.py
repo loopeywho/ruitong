@@ -289,3 +289,30 @@ class TestRateLimit:
             resp3 = rl_client.post("/v1/port", json={"model": "Qwen3-8B"})
             assert resp3.status_code == 429
             assert resp3.json()["error"] == "Rate limit exceeded"
+
+
+class TestJobConcurrency:
+    """Job concurrency cap (P2.13)."""
+
+    def test_concurrency_cap_blocks_when_active_jobs_exist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When max_concurrent_jobs is 1, and a job is pending, new jobs get 429."""
+        monkeypatch.setenv("RUITONG_MAX_CONCURRENT_JOBS", "1")
+        import importlib
+        import ruitong.main
+        importlib.reload(ruitong.main)
+        with TestClient(ruitong.main.app) as c:
+            # Submit a job — store it as pending
+            resp1 = c.post("/v1/port/preview", json={"model": "Qwen3-8B"})
+            assert resp1.status_code == 202, resp1.text
+
+            # Directly reset the job to pending so the second submission sees it
+            from ruitong.jobs.persistence import JobStore
+            from ruitong.api import JobStatus
+            store = getattr(ruitong.main.app.state, "job_store", None)
+            if store:
+                store.update_status(resp1.json()["job_id"], JobStatus.pending)
+
+            # Second job — should be rejected
+            resp2 = c.post("/v1/port/preview", json={"model": "Qwen3-8B"})
+            assert resp2.status_code == 429, resp2.text
+            assert "Too many concurrent jobs" in resp2.json()["detail"]

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..backends.fake import FakeAscend, FakeCuda
+from ..config import BridgeConfig
 from ..equivalence.runner import EquivalenceRunner, EquivalenceReport
 from ..jobs.persistence import JobStore
 from . import (
@@ -124,7 +125,18 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
 
     Returns immediately with a job_id. Poll GET /v1/port/preview/{job_id}
     to retrieve the result when status is ``done``.
+
+    Rejects with 429 when the concurrency limit is reached (P2.13).
     """
+    config: BridgeConfig = getattr(request.app.state, "config", BridgeConfig.from_env())
+    if config.max_concurrent_jobs > 0:
+        store = getattr(request.app.state, "job_store", None)
+        if store is not None and store.count_active() >= config.max_concurrent_jobs:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many concurrent jobs (max {config.max_concurrent_jobs})",
+            )
+
     job_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
 
@@ -176,7 +188,11 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
             )
             store.update_result(job_id, JobStatus.error, result)
 
-    asyncio.create_task(_run_job())
+    task = asyncio.create_task(_run_job())
+    # Track for cleanup on shutdown (P2.13 — orphaned tasks)
+    bg_tasks: set[asyncio.Task] = getattr(request.app.state, "background_tasks", set())
+    bg_tasks.add(task)
+    task.add_done_callback(bg_tasks.discard)
     return job
 
 

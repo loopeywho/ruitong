@@ -85,6 +85,9 @@ class BridgeConfig:
     # Pricing configuration (raw dicts keyed by model name).
     pricing_config: dict[str, dict] = field(default_factory=dict)
 
+    # Maximum concurrent async jobs. 0 = unlimited.
+    max_concurrent_jobs: int = 10
+
     @classmethod
     def from_env(cls) -> BridgeConfig:
         """Build a config from the current environment.
@@ -125,4 +128,7 @@ class BridgeConfig:
             job_db_path=os.environ.get("RUITONG_JOB_DB_PATH", ""),
             key_db_path=os.environ.get("RUITONG_KEY_DB_PATH", ""),
             pricing_config=pricing,
+            max_concurrent_jobs=_int_from_env(
+                "RUITONG_MAX_CONCURRENT_JOBS", 10
+            ),
         )

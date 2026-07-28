@@ -1,6 +1,7 @@
 """FastAPI application for Ruitong Bridge."""
 from __future__ import annotations
 
+import asyncio
 import hmac
 import time
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from .api.router import router as port_router
 from .auth.router import router as admin_router
 from .auth.keystore import KeyStore
 from .backends.fake import FakeAscend, FakeCuda
+from .backends.vllm_http import VllmHttpBackend
 from .config import BridgeConfig
 from .errors import BackendError, BackendUnavailable, ModelNotFound
 from .jobs.persistence import JobStore
@@ -43,8 +45,15 @@ async def lifespan(app: FastAPI):
         )
 
     registry = BackendRegistry(config)
-    registry.register("cuda", FakeCuda())
-    registry.register("ascend", FakeAscend())
+    # Register real backends when configured, fakes as fallback (P2.13)
+    if config.cuda_base_url:
+        registry.register("cuda", VllmHttpBackend(name="cuda", base_url=config.cuda_base_url))
+    else:
+        registry.register("cuda", FakeCuda())
+    if config.ascend_base_url:
+        registry.register("ascend", VllmHttpBackend(name="ascend", base_url=config.ascend_base_url))
+    else:
+        registry.register("ascend", FakeAscend())
     app.state.router = Router(registry=registry, config=config)
     app.state.config = config
     app.state.job_store = JobStore(db_path=config.job_db_path)
@@ -52,7 +61,13 @@ async def lifespan(app: FastAPI):
     app.state.pricing_config = config.pricing_config
     app.state.rate_limit_buckets = {}  # dict[str, list[float]]
     app.state.rate_limit_counter = 0
+    app.state.background_tasks: set[asyncio.Task] = set()  # track for cleanup
     yield
+    # Cancel background tasks on shutdown (P2.13 — orphaned tasks)
+    for task in app.state.background_tasks:
+        task.cancel()
+    if app.state.background_tasks:
+        await asyncio.wait(app.state.background_tasks, timeout=5.0)
 
 
 app = FastAPI(
