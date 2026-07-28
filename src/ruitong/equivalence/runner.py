@@ -21,6 +21,7 @@ from .metrics import (
     top_k_max_abs_diff,
     probability_mass,
     count_non_finite,
+    count_degenerate_token_rows,
     token_matched_prob_diff,
 )
 
@@ -335,6 +336,34 @@ class EquivalenceRunner:
                 # this, a *correct* Ascend port is condemned for an upstream
                 # sampler defect — a false FAIL, and an expensive one to
                 # debug because every metric looks plausibly bad.
+                # ── Degenerate token identity (vllm-ascend #7218) ──
+                # Every top_logprobs entry repeating one token id is a
+                # serialisation defect, not a ranking. Measured: an Ascend
+                # port with logprob values BIT-IDENTICAL to NVIDIA scores
+                # 0.925 tmpd / 0.000 top1 against it -- a hard FAIL on two of
+                # three gate metrics, condemning a numerically perfect port
+                # for an upstream bug. Same D8 reasoning as non-finite below.
+                # Verified not to fire on correct output: 0 of 5,677 rows
+                # across all three captured NVIDIA corpora.
+                degen_a = count_degenerate_token_rows(toks_a) if toks_a else 0
+                degen_b = count_degenerate_token_rows(toks_b) if toks_b else 0
+                if degen_a or degen_b:
+                    sides = []
+                    if degen_a:
+                        sides.append(f"{self.backend_a_name}={degen_a}")
+                    if degen_b:
+                        sides.append(f"{self.backend_b_name}={degen_b}")
+                    warnings.append(
+                        f"Degenerate top_logprobs for prompt '{prompt[:50]}' "
+                        f"({', '.join(sides)} rows carry a single repeated "
+                        f"token id). Token identity is unusable; the logprob "
+                        f"values may still be correct. Server defect, not a "
+                        f"port defect. Not graded. See vllm-ascend#7218."
+                    )
+                    result.mode = "unusable"
+                    per_prompt.append(result)
+                    continue
+
                 bad_a = count_non_finite(logs_a)
                 bad_b = count_non_finite(logs_b)
                 if bad_a or bad_b:

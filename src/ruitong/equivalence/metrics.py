@@ -363,3 +363,34 @@ def count_non_finite(tensor: list[list[float]]) -> int:
     return sum(
         1 for row in tensor for value in row if not math.isfinite(value)
     )
+
+
+def count_degenerate_token_rows(tokens: list[list[str]]) -> int:
+    """Count top-k rows whose entries all carry the SAME token identity.
+
+    A correct top-k list names k *distinct* tokens. Duplicate decoded strings
+    are normal and common — many token ids decode to the same text, and real
+    NVIDIA rows in this repo's corpora reach 18 duplicate slots out of 20
+    (two unique strings). But a row with exactly ONE unique value across k>1
+    entries is not a ranking; it is a serialisation defect.
+
+    Real and specific: `vllm-ascend` issue #7218 (open, 0.16.0rc2 on 910B3/B4)
+    reports every `top_logprobs` entry repeating the selected token's id --
+    "top_logprobs的id都和被选择的token一致，看不到其余top token". The logprob
+    VALUES in that report are correct and monotonic; only token identity is
+    lost.
+
+    Why this needs its own guard: measured against this gate, an Ascend port
+    whose logprob values are *bit-identical* to NVIDIA scores 0.925 on
+    token_matched_prob_diff and 0.000 on top1_agreement -- a hard FAIL on two
+    of three gate metrics -- because every token lookup misses. A numerically
+    perfect port would be condemned for an upstream serialisation bug. That is
+    the D8 distinction (exit 1 "the port is broken" vs exit 2 "we could not
+    tell") and it must resolve to the second.
+
+    Verified not to fire on correct output: 0 of 5,677 rows across all three
+    captured NVIDIA corpora.
+    """
+    return sum(
+        1 for row in tokens if len(row) >= 2 and len(set(row)) == 1
+    )

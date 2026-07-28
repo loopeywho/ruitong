@@ -479,6 +479,59 @@ class TestRunnerGateIntegration:
         )
 
 
+class TestDegenerateTokensAreRefused:
+    """vllm-ascend #7218: every top_logprobs entry repeats one token id.
+
+    The logprob VALUES in that bug report are correct and monotonic — only
+    token identity is lost. So an Ascend port could be numerically perfect
+    and still be condemned by two of three gate metrics, because every token
+    lookup misses. Measured, with values bit-identical to the reference:
+    token_matched_prob_diff 0.925, top1_agreement 0.000.
+
+    That is a server defect, not a port defect (D8), so it is refused rather
+    than graded — exactly like non-finite logprobs.
+    """
+
+    def test_degenerate_rows_detected_but_normal_duplication_is_not(self) -> None:
+        from ruitong.equivalence.metrics import count_degenerate_token_rows
+
+        # Duplicate decoded strings are NORMAL: many token ids decode to the
+        # same text. Real NVIDIA rows in this repo reach 18 duplicate slots
+        # out of 20. Only ONE unique value across the whole row is degenerate.
+        assert count_degenerate_token_rows([["the", "a", "an"]]) == 0
+        assert count_degenerate_token_rows([["x", "", "", "", ""]]) == 0
+        assert count_degenerate_token_rows([["token_id:101850"] * 5]) == 1
+        assert count_degenerate_token_rows([["only"]]) == 0, (
+            "a single-entry row is not a degenerate ranking"
+        )
+
+    def test_guard_does_not_fire_on_real_captured_output(self, corpus) -> None:
+        """The cost of a false positive here is refusing a real comparison,
+        so this is checked against actual captured NVIDIA output."""
+        from ruitong.equivalence.metrics import count_degenerate_token_rows
+
+        total = sum(count_degenerate_token_rows(e["top_tokens"]) for e in corpus)
+        assert total == 0, f"{total} real rows would be wrongly refused"
+
+    async def test_runner_refuses_rather_than_condemning_a_perfect_port(self) -> None:
+        """Drives the REAL EquivalenceRunner. The reference and candidate have
+        IDENTICAL logprob values — a numerically perfect port — and differ only
+        in that the candidate's token identity is degenerate."""
+        reference_row = [("the", -0.078), ("a", -3.078), ("an", -5.265)]
+        ascend_row = [("token_id:101850", -0.078)] * 3  # same values, lost ids
+
+        runner = EquivalenceRunner(
+            _RowBackend("cuda", reference_row), _RowBackend("ascend", ascend_row)
+        )
+        report = await runner.run("m", ["p"])
+
+        assert report.per_prompt_results[0].mode == "unusable", (
+            "a serialisation defect must not be graded as a port defect"
+        )
+        assert not report.passed, "must not certify when it could not compare"
+        assert any("Degenerate" in w for w in report.warnings)
+
+
 class TestNonFiniteLogprobsAreRefused:
     """A server emitting -inf/NaN is a SERVER defect, not a port defect.
 
