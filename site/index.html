@@ -211,15 +211,31 @@
   </div>
 
   <p><strong>Simulated rounding understated the real effect by 95×.</strong> Worse, genuine
-  cross-silicon variation is <em>larger</em> than a real temperature bug — so top-10 distribution
-  distance cannot tell a correct port on new hardware apart from a broken one.</p>
+  cross-silicon variation is <em>larger</em> than a real temperature bug — so a single distance
+  metric, on its own, cannot tell a correct port on new hardware apart from a broken one.</p>
 
-  <p>We have not widened the threshold to make this pass. A gate loose enough to accept 0.122
-  would wave through a 5% temperature error. The thresholds are left unchanged and documented as
-  failing this comparison, because the honest conclusion is that distribution distance is the
-  wrong signal across hardware. What held was <strong>top-1 agreement (1.000 at every compared
-  position)</strong>, <strong>divergence rate</strong>, and <strong>probability-mass
-  preservation</strong> — and those are what we will build the claim on.</p>
+  <h3>How we fixed it — and the hole we found in the obvious fix</h3>
+
+  <p>The tempting fix was to drop distribution distance entirely and gate on the two metrics with
+  a perfect record on real hardware: <strong>top-1 agreement</strong> (1.000 at every compared
+  position, three independent runs) and <strong>probability-mass preservation</strong>. We tested
+  that against every fault before shipping it. <strong>It has a hole.</strong></p>
+
+  <p>A transposed-operator bug — logprob values scrambled, token identity untouched — moves both
+  of those by <em>exactly zero</em>. Permuting values within a row changes neither which token
+  sits at rank 0 nor the row&rsquo;s sum. Only a metric that matches probability by <em>token
+  identity</em> catches it.</p>
+
+  <p>So the gate is <strong>compound</strong>: three metrics, any one failing means FAIL.
+  Distribution distance stays — <em>recalibrated</em>, not loosened. Its ceiling moved from
+  <code>0.0022</code> to <code>0.4402</code>: the geometric mean of measured real cross-hardware
+  noise (0.195) and the weakest fault it must catch (0.993), clear by 2.26× on each side. The old
+  number was never a wrong idea; it was anchored to a simulation that was 95× too optimistic.</p>
+
+  <p class="mut">Disclosed rather than buried: a <strong>1% temperature error</strong> is not
+  reliably caught by any of the three once thresholds tolerate real cross-hardware noise. No
+  threshold wide enough for 0.195 can also catch a fault scoring 0.004. Our test suite asserts
+  this gap exists, so it cannot close or widen silently.</p>
 
   <p class="mut">Caveat we will not bury: 61 prompts still leaves a 95% interval of 16.8&ndash;38.4%.
   The rate did not measurably change when we went from 16 prompts to 61 — the interval simply
@@ -433,9 +449,17 @@
   </table>
   </div>
 
-  <p><strong>模拟舍入把真实效应低估了 95 倍。</strong>更关键的是，真实的跨芯片差异<em>大于</em>一个真实的温度参数缺陷——因此 top-10 分布距离无法区分"迁移到新硬件后依然正确"与"迁移出错"。</p>
+  <p><strong>模拟舍入把真实效应低估了 95 倍。</strong>更关键的是，真实的跨芯片差异<em>大于</em>一个真实的温度参数缺陷——因此单一的分布距离指标本身，无法区分"迁移到新硬件后依然正确"与"迁移出错"。</p>
 
-  <p>我们没有为了让它通过而放宽门限。宽到能容下 0.122 的门限，会放行 5% 的温度参数误差。门限维持原值，并如实记录其在本次比对中判定失败——因为诚实的结论是：跨硬件场景下，分布距离本身就是错误的信号。真正稳住的是 <strong>Top-1 一致率（所有比对位置均为 1.000）</strong>、<strong>分叉率</strong>与<strong>概率质量守恒</strong>，我们将据此构建结论。</p>
+  <h3>我们如何修正——以及在"显而易见的修法"里发现的漏洞</h3>
+
+  <p>最直接的修法，是彻底弃用分布距离，只用两项在真实硬件上记录完美的指标把关：<strong>Top-1 一致率</strong>（三次独立实测，所有比对位置均为 1.000）与<strong>概率质量守恒</strong>。我们在上线前用全部注入故障检验了这个方案，<strong>它有漏洞</strong>。</p>
+
+  <p>算子转置类缺陷——logprob 数值被打乱、token 身份不变——会让这两项指标的变化<em>恰好为零</em>：行内数值互换，既不改变排在第 0 位的是哪个 token，也不改变该行的总和。只有按 <em>token 身份</em>对齐概率的指标才能捕获它。</p>
+
+  <p>因此门限是<strong>复合</strong>的：三项指标，任一不通过即判定失败。分布距离予以保留，但是<em>重新校准</em>，而非放宽：上限从 <code>0.0022</code> 调整为 <code>0.4402</code>——取实测跨硬件噪声（0.195）与其需捕获的最弱故障（0.993）的几何平均，两侧各留 2.26 倍余量。旧数值本身并非错误的思路，只是锚定在一个乐观了 95 倍的模拟上。</p>
+
+  <p class="mut">如实公开而非回避：一旦门限需要容纳真实的跨硬件噪声，<strong>1% 的温度参数误差</strong>就无法被这三项指标可靠检出——能容纳 0.195 的门限，不可能同时捕获一个得分仅 0.004 的故障。我们的测试套件专门断言了这个盲区的存在，使其无法在无人察觉的情况下改变。</p>
 
   <p class="mut">不回避的局限：即便扩充到 61 条，95% 置信区间仍为 16.8–38.4%。从 16 条增加到 61 条时，分叉率并未出现可测量的变化——只是区间收窄了。因此 26% 应被视为带有真实不确定性的估计值，而非规格承诺。</p>
 

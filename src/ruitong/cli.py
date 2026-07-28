@@ -201,7 +201,7 @@ def _print_summary(
         "token_matched_prob_diff": "Token-matched prob diff [GATE]",
         "probability_mass_delta": "Prob-mass delta         [GATE]",
         "top1_agreement": "Top-1 agreement         [GATE]",
-        "top5_set_agreement": "Top-5 set agreement     [GATE]",
+        "top5_set_agreement": "Top-5 set agreement     (reported)",
         "topk_max_abs_diff": "Top-k max abs diff      (reported)",
         "cosine_similarity": "Cosine similarity       (reported)",
         "max_absolute_difference": "Max abs diff            (reported)",

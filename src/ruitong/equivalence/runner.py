@@ -37,42 +37,67 @@ DEFAULT_TOP_LOGPROBS = 20
 class Thresholds:
     """Pass/fail thresholds for equivalence."""
 
-    # ── Primary gate (DECISIONS.md D9 — measured on real hardware) ───
+    # ── Primary gate, tier 1 (DECISIONS.md D12 — recalibrated on TWO
+    # real GPUs, not one) ─────────────────────────────────────────────
     #
-    # Token-matched probability difference. Calibrated against a captured
-    # Qwen3-8B corpus from an NVIDIA A40 (corpora/cuda_a40_qwen3_8b.json),
-    # not against synthetic fixtures:
-    #
-    #   identical port                    0.0        (exactly)
-    #   bf16 rounding (correct port)      1.293e-03  <- noise ceiling
-    #   scale x1.01 (weakest fault)       3.660e-03  <- detection limit
-    #   scale x1.05                       1.795e-02
-    #   swap top-2 / shift / demote top   ~1.0
-    #
-    # 2.2e-03 is the geometric mean of the noise ceiling and the weakest
-    # fault: 1.7x above noise, 1.7x below the nearest fault. That margin is
-    # thinner than one would like — a temperature error below ~1% is at or
-    # past the detection limit and is reported as such rather than hidden.
-    TOKEN_MATCHED_PROB_DIFF_MAX: float = 2.2e-03
-
-    # ── Demoted to reported-only (D9) ───────────────────────────────
-    # `top_k_max_abs_diff` was the D7 primary gate. Real hardware retired it:
-    # it ranks by position, so tail near-ties swap rank and it compares two
-    # *different* tokens; and it works in log space, so a shift at logprob
-    # -26 (p ~ 5e-12) scores the same as one at the argmax. Measured on the
-    # A40, two CORRECT executions of the same prompt differing only in
-    # prefix-cache state scored up to 1.25 — above the weakest fault at
-    # 0.406. Its noise and fault distributions overlap on real data, so no
-    # threshold exists that separates them. Kept for report continuity only.
-    TOPK_MAX_ABS_DIFF_MAX: float = 0.05
-    # probability-mass DELTA between the two backends (top-k only, so an
-    # absolute check against 1.0 would be meaningless). A x1.05 scaling fault
-    # shifts one side by ~0.096 — the defect class top-k max-abs-diff misses.
+    # top1_agreement and probability_mass_delta together answer "did the
+    # model's most-likely token ever change, and was probability mass
+    # conserved". Both have zero exceptions across three independent real
+    # cross-hardware runs (D9 warm/warm, D10 A40-vs-Ada, D11 A40-vs-Ada
+    # again with 61 prompts). Kept exactly as calibrated.
     PROB_MASS_TOLERANCE: float = 0.01
     TOP1_MIN: float = 0.99
+
+    # ── Primary gate, tier 2 — token-matched probability difference ──
+    #
+    # tier 1 alone has a real, measured blind spot: a fault that mutates
+    # LOGPROB VALUES while leaving the TOKEN ARRAY untouched (a transposed-
+    # operator bug is exactly this shape) moves top1_agreement and
+    # probability_mass_delta by ZERO — permuting values within a row changes
+    # neither which token nominally sits at rank 0 nor the row's sum. Only a
+    # metric that matches probability BY TOKEN IDENTITY catches it.
+    #
+    # D9 used this metric as the sole primary gate at 2.2e-3, calibrated on
+    # SIMULATED bf16 rounding as a noise proxy. D10/D11 measured REAL
+    # cross-silicon noise (NVIDIA A40 vs RTX 6000 Ada) at up to 0.195 —
+    # 89x the simulated estimate — which made that threshold reject every
+    # correct cross-hardware port. The metric itself was never the problem;
+    # the noise estimate it was calibrated against was.
+    #
+    #   real cross-hardware noise (D11, 61 prompts, max)  0.195   <- ceiling
+    #   swap top-2 / shift / demote argmax                ~1.0
+    #   corrupt 1-in-8 (weakest of this tier)              0.993  <- nearest fault
+    #
+    # 0.4402 is the geometric mean: 2.26x above measured noise, 2.26x below
+    # the nearest fault in this tier. Deliberately NOT calibrated to catch
+    # `scale x1.01` (a 1% temperature error, scores ~0.004-0.02 on this
+    # metric) — no threshold that tolerates real cross-hardware noise (0.195)
+    # can also catch a fault that small; that gap is inherent, not a
+    # regression, and was already flagged in D9. It IS caught independently
+    # by tier 1 above 1.05x scaling (probability_mass_delta) whenever the
+    # scaling factor is large enough to move mass past 0.01.
+    TOKEN_MATCHED_PROB_DIFF_MAX: float = 0.4402
+
+    # ── Demoted to reported-only (D9 / D12) ─────────────────────────
+    # `top_k_max_abs_diff` (D9): ranks by position, so tail near-ties compare
+    # two *different* tokens; works in log space, so a shift at logprob -26
+    # (p~5e-12) scores the same as one at the argmax. Two CORRECT executions
+    # differing only in prefix-cache state scored up to 1.25 on the A40 —
+    # above the weakest fault at 0.406. Noise and fault distributions
+    # overlap on real data; no threshold separates them.
+    #
+    # `top5_set_agreement` (D12): checked against every fault in the
+    # sensitivity suite — it catches nothing that top1_agreement does not
+    # already catch (both only see shift_positions; both are blind to
+    # value-only corruption, since neither reads a logprob). Meanwhile it
+    # sits at 0.9167 on EVERY real cross-hardware measurement so far
+    # (D10 and D11, identical to four decimal places), just under its own
+    # 0.95 gate, for reasons unrelated to correctness. Zero unique coverage,
+    # one more way to reject a correct port — retired.
+    TOPK_MAX_ABS_DIFF_MAX: float = 0.05
     TOP5_MIN: float = 0.95
 
-    # ── Reported but NOT gated ──────────────────────────────────────
+    # ── Reported but NOT gated (D9) ──────────────────────────────────
     # Both were measured unusable as gates and are kept for continuity of the
     # report only:
     #   cosine_similarity — scale-invariant by definition, so x1.01 through
@@ -449,16 +474,27 @@ class EquivalenceRunner:
             warnings=warnings,
         )
 
-        # ── Gate (DECISIONS.md D9) ──────────────────────────────────
+        # ── Gate (DECISIONS.md D12) ──────────────────────────────────
         #
-        # Only calibrated metrics gate. Three are reported but deliberately
-        # NOT gated, each retired by measurement rather than opinion:
+        # Four are reported but NOT gated, each retired by measurement:
         #   cosine_similarity        — scale-invariant, blind to scaling faults
         #   max_absolute_difference  — full-vocab, rejects every correct port
         #   topk_max_abs_diff        — ranks by position and works in log
-        #        space, so on real A40 data its noise (up to 1.25 between two
-        #        CORRECT executions) exceeds its weakest fault (0.406). No
-        #        threshold can separate overlapping distributions.
+        #        space; noise (up to 1.25) exceeds its weakest fault (0.406)
+        #   top5_set_agreement       — catches nothing top1_agreement does
+        #        not already catch, while sitting at 0.9167 on every real
+        #        cross-hardware run regardless of correctness (D12)
+        #
+        # The three that gate cover complementary failure classes: top1 and
+        # mass catch whole-row/whole-distribution defects (position shifts,
+        # scaling, catastrophic collapse); token_matched_prob_diff is the
+        # only one that catches VALUE-ONLY corruption at a fixed token
+        # position (e.g. a transposed-operator bug) — top1 and mass are both
+        # structurally blind to that, since permuting values within a row
+        # changes neither which token nominally sits at rank 0 nor the row's
+        # sum. Its threshold was recalibrated in D12 against real two-GPU
+        # noise (0.195) rather than the D9 simulated estimate (0.0013),
+        # which had made it reject every correct cross-hardware port.
         gated: list[bool] = []
         m = report.metrics
 
@@ -473,8 +509,6 @@ class EquivalenceRunner:
             )
         if m.get("top1_agreement") is not None:
             gated.append(m["top1_agreement"] >= Thresholds.TOP1_MIN)
-        if m.get("top5_set_agreement") is not None:
-            gated.append(m["top5_set_agreement"] >= Thresholds.TOP5_MIN)
 
         # No gated metric means nothing was measured. That is "could not
         # determine", never "equivalent" — a report with no evidence must not

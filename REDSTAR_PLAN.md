@@ -6,8 +6,7 @@ Maintained by Claude (audit + direction). Boss gates all spend and launches.
 Open items only. History lives in `DECISIONS.md`, `LESSONS.md`, `CALIBRATION.md`
 — read those once, not every round.
 
-**State:** code HEAD `d668f58` · 236 tests · mypy clean on 26 files · 80%
-coverage (re-verified 2026-07-28).
+**State:** code HEAD post-D12 (2026-07-28) · 258 tests · mypy clean on 26 files.
 Verify with `uv run --extra dev pytest -q` and `uv run mypy src/ruitong`, and
 quote the real output. Never report a verdict you did not run.
 
@@ -24,26 +23,51 @@ The harness only ever sees logprobs over an OpenAI-compatible HTTP endpoint, so
 it has no idea what silicon is behind it. That is deliberate: one codebase
 serves the China market (Ascend) and the West (AMD/NVIDIA).
 
-## 2. The one thing you must not undo
+## 2. The gate — read `DECISIONS.md` D12 before touching it
 
-**The gate is currently known-wrong, on purpose.** Read `DECISIONS.md` D10.
+**UPDATED 2026-07-28 (D12). The earlier "the gate is known-wrong, do not
+touch it" instruction is superseded — it has now been fixed properly.**
 
-Measured 2026-07-28 on two real NVIDIA GPUs (A40 vs RTX 6000 Ada), identical
-stack, only the silicon differing:
+The gate is **compound**: three metrics, ANY failing → overall FAIL.
 
-- **3 of 16 prompts produced different text.**
-- Worst token-matched Δprob **0.122**, against a threshold of **0.0022**.
+| metric | threshold | catches |
+|---|---|---|
+| `top1_agreement` | ≥ 0.99 | position shifts |
+| `probability_mass_delta` | ≤ 0.01 | scaling, corruption, argmax collapse |
+| `token_matched_prob_diff` | ≤ **0.4402** | value-only corruption at a fixed token position |
 
-So the gate fails a *correct* port between two NVIDIA cards. **Do not "fix"
-this by widening `TOKEN_MATCHED_PROB_DIFF_MAX`.** Real cross-silicon noise
-(0.122) is 6.8× *larger* than a ×1.05 temperature fault (0.018), so any
-threshold loose enough to pass the former also passes a genuine bug. The
-thresholds stay unchanged and documented as failing until there is a larger
-corpus. A PR that widens them will be rejected.
+**Why all three, and why you must not drop any of them.** The obvious
+simplification — gate on `top1_agreement` + `probability_mass_delta`, both of
+which have a perfect record on real hardware — was tested against every fault
+before being implemented, and **has a hole**: `swap top-2` (a transposed-
+operator bug — values scrambled, token identity unchanged) moves both of them
+by *exactly zero*. Permuting values within a row changes neither which token
+sits at rank 0 nor the row's sum. `token_matched_prob_diff` is the only metric
+that catches it, because it matches probability by *token identity* rather
+than by position.
 
-Three metrics have now been retired **by measurement**: cosine similarity,
-full-vocab max-abs-diff, and top-k max-abs-diff. What survived: **top-1
-agreement**, **divergence rate**, **probability-mass preservation**.
+Its threshold changed from `0.0022` to `0.4402` — **recalibrated, not
+loosened arbitrarily**. The old value came from *simulated* bf16 noise, which
+D10 showed is 95× too optimistic. `0.4402` is the geometric mean of measured
+real cross-hardware noise (0.195, D11) and the weakest fault in its tier
+(0.993): 2.26× clear on each side.
+
+**Rules that still apply:**
+- **Do not widen any threshold to make a failing comparison pass.** If a
+  correct port fails, the fix is a better metric or a better measurement —
+  never a wider number. Every threshold in this repo traces to a measurement
+  you can re-run; a PR that changes one without a new measurement will be
+  rejected.
+- **Do not drop a metric from the gate because it "seems redundant."** Three
+  have already been retired *by measurement* (cosine similarity, full-vocab
+  max-abs-diff, top-k max-abs-diff) and a fourth in D12
+  (`top5_set_agreement` — zero unique coverage, and it sits at 0.9167 on
+  every real cross-hardware run regardless of correctness). Retirement
+  requires showing the metric catches nothing the others catch.
+- **`scale ×1.01` (a 1% temperature error) is a known, disclosed gap** — no
+  metric catches it once thresholds tolerate real cross-hardware noise. This
+  is asserted deliberately in `TestKnownDetectionGap`. If you close it, say
+  so loudly; don't let it change silently.
 
 ## 3. Your unique value — do R1 first
 

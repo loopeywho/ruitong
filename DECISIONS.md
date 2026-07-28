@@ -354,3 +354,107 @@ report claims.
 Reproduce:
 `python tools/compare_corpora.py corpora/a40_61.json corpora/rtx6000ada_61.json`
 `… --subset-of corpora/cuda_a40_qwen3_8b.json` for the like-for-like.
+
+---
+
+## D12 — Compound gate: recalibrate token_matched_prob_diff on real noise, demote top5_set_agreement
+
+**2026-07-28 · Boss's framing call: v1 ships a verdict, built only on metrics
+proven robust by real hardware.** D10/D11 established that a single distance
+metric (`token_matched_prob_diff` at its D9 threshold) cannot discriminate
+real cross-silicon noise (0.195 max, D11) from a genuine but weak fault
+(0.018, `scale ×1.05`) — the distributions overlap. The naive fix — demote it
+to reported-only, gate on `top1_agreement` + `probability_mass_delta` alone —
+was checked against every fault in the sensitivity suite **before
+implementing**, not assumed correct because it sounded principled.
+
+### The gap that check found
+
+`swap top-2` (mimics a transposed-operator bug: values scrambled, token
+identity unchanged) moves `top1_agreement` and `probability_mass_delta` by
+**exactly zero**. Both are structurally blind to it: `top1_agreement` compares
+which token string sits at index 0 (unchanged by a value-only permutation);
+`probability_mass_delta` sums `exp(logprob)` over a row, which is invariant
+under permuting values within that row. A gate built on just those two would
+have silently PASSED a real, serious defect class.
+
+`token_matched_prob_diff` is the only metric here that catches value-only
+corruption at a fixed token position — it matches probability *by token
+identity*, not position. The D9 threshold wasn't a wrong idea; it was
+calibrated against the wrong noise estimate (simulated bf16, 95x optimistic —
+see D10).
+
+### The fix: recalibrate, don't discard
+
+| | value |
+|---|---|
+| real cross-hardware noise ceiling (D11, 61 prompts, max) | 0.195 |
+| weakest fault in this tier (`corrupt 1-in-8`) | 0.993 |
+| **new `TOKEN_MATCHED_PROB_DIFF_MAX`** (geometric mean) | **0.4402** |
+
+2.26× above measured noise, 2.26× below the nearest fault in its tier —
+same shape of margin D9 used, now anchored to two real GPUs instead of one
+simulation.
+
+Checked against every fault (real corpus, not synthetic):
+
+| fault | top1_agreement | mass_delta | tmpd (new ceiling 0.44) |
+|---|---|---|---|
+| scale ×1.01 | miss | miss | miss — **known gap, see below** |
+| scale ×1.05 | miss | **catch** (0.023) | miss |
+| swap top-2 | miss | miss | **catch** (1.000) |
+| shift positions | **catch** (0.0) | — | catch (1.000) |
+| corrupt 1-in-8 | miss | **catch** (0.248) | catch (0.993) |
+| demote argmax | miss | **catch** (1.000) | catch (1.000) |
+
+Every fault except `scale ×1.01` is caught by at least one gate metric.
+
+### top5_set_agreement: demotion confirmed correct
+
+Checked the same way: catches nothing `top1_agreement` does not already
+catch (both see only `shift_positions`), while sitting at **0.9167 on every
+real cross-hardware measurement so far** (D10 and D11, identical to four
+decimal places) regardless of correctness — the same "rejects a correct port
+for reasons unrelated to the port" pattern that retired three metrics
+already. Zero unique coverage, one more way to produce a false FAIL. Moved
+to reported-only.
+
+### Known, disclosed gap: `scale ×1.01`
+
+A 1% temperature error is not reliably caught by anything once thresholds
+tolerate real cross-hardware noise. This is **not a regression** — D9's
+original text already called this fault "at or past the detection limit."
+It is now honestly true for cross-hardware comparisons specifically, not
+papered over: `tests/test_sensitivity.py::TestKnownDetectionGap` asserts
+this gap exists and will fail (usefully) the day it closes.
+
+### Side effect, disclosed not hidden: cache-state margin
+
+The D9 gate happened to also separate cold-vs-warm cache noise (0.0865,
+D9 Finding 2) from a correct port, as a byproduct of being calibrated far
+too tight. The D12 ceiling (0.4402) no longer does — 0.0865 < 0.4402. This
+does **not** mean cache state is safe to leave uncontrolled: the runner's
+`_warm()` step is unconditional and structural
+(`test_equivalence.py::TestWarmUpPass` asserts it runs twice per prompt per
+backend), so the protection was moved from "a numeric coincidence" to "the
+code always does this," which is the more honest place for it to live.
+Whether `probability_mass_delta`/`top1_agreement` would independently catch
+un-warmed noise is not measured and is not assumed.
+
+### Verified before shipping
+
+- Full sensitivity suite rewritten to test the **compound** gate (all three
+  metrics together, mirroring the runner's actual `AND` composition), not
+  `token_matched_prob_diff` in isolation as the D9 version did.
+- New test asserts the actual D10/D11 measurement (A40 vs RTX 6000 Ada, a
+  genuinely correct port) now certifies **PASS** — the thing the D9 gate
+  could never do.
+- Mutation-tested at two levels: reverting the threshold breaks the
+  cross-hardware-pass test; and — caught only on a second pass, after the
+  first mutation test revealed the sensitivity suite reimplements the gate
+  formula independently rather than exercising `runner.py`'s actual code —
+  a new integration test (`TestRunnerGateIntegration`) drives the real
+  `EquivalenceRunner` end-to-end and is the only test that fails if the
+  runner's gate wiring itself regresses.
+
+258 passed, mypy clean on 26 files.
