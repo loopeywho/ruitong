@@ -247,26 +247,19 @@ class TestPayloadCap:
     """Payload size limit."""
 
     def test_large_payload_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Payload exceeding limit returns 413."""
+        """Payload exceeding limit returns 413 (fixed: was tautological)."""
         monkeypatch.setenv("RUITONG_MAX_PAYLOAD_BYTES", "100")
         import importlib
         import ruitong.main
         importlib.reload(ruitong.main)
         cap_client = TestClient(ruitong.main.app)
 
-        # A small object but with a deliberately large Content-Length
-        # We need to actually send enough bytes to trigger the cap
-        long_prompts = ["x" * 50]  # 50 bytes — exceeds 100-byte limit? No, 50 < 100
-        # Actually let's just test with a model that causes the body to be large enough
         resp = cap_client.post(
             "/v1/port",
-            json={"model": "x" * 50},
+            json={"model": "x" * 200, "prompts": ["y" * 200]},
         )
-        # If it fits, it should 200
-        if resp.status_code == 413:
-            assert resp.json()["error"] == "Payload too large"
-        else:
-            assert resp.status_code == 200
+        assert resp.status_code == 413, f"Expected 413, got {resp.status_code}: {resp.text[:200]}"
+        assert resp.json()["error"] == "Payload too large"
 
 
 class TestRateLimit:
