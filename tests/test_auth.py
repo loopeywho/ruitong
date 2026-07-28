@@ -373,3 +373,97 @@ class TestAuthMiddleware:
             assert resp.status_code == 200, resp.text
             data = resp.json()
             assert data["validation_level"] == "simulated"
+
+
+class TestAdminAudit:
+    """Admin API audit logging (P2.8)."""
+
+    ENV_VARS = {"RUITONG_ADMIN_KEY": "admin-secret", "RUITONG_API_KEY": "legacy-key"}
+
+    def _setup(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        for k, v in self.ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.setenv("RUITONG_KEY_DB_PATH", ":memory:")
+        import ruitong.main
+        importlib.reload(ruitong.main)
+        return TestClient(ruitong.main.app)
+
+    def test_create_key_logs_audit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """POST /admin/keys logs action=create_key with key_id and name."""
+        caplog.set_level("INFO", logger="ruitong.admin")
+        with self._setup(monkeypatch) as client:
+            resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "my-key"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 200
+            key_id = resp.json()["key_id"]
+
+        assert any(
+            "action=create_key" in r.message and key_id in r.message and "my-key" in r.message
+            for r in caplog.records
+        ), f"Expected create_key audit log, got {[r.message for r in caplog.records]}"
+
+    def test_revoke_key_logs_audit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """DELETE /admin/keys/{id} logs action=revoke_key with key_id."""
+        caplog.set_level("INFO", logger="ruitong.admin")
+        with self._setup(monkeypatch) as client:
+            create_resp = client.post(
+                "/v1/admin/keys",
+                json={"name": "to-revoke"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            key_id = create_resp.json()["key_id"]
+
+            resp = client.delete(
+                f"/v1/admin/keys/{key_id}",
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 200
+
+        assert any(
+            "action=revoke_key" in r.message and key_id in r.message and "result=success" in r.message
+            for r in caplog.records
+        ), f"Expected revoke_key audit log, got {[r.message for r in caplog.records]}"
+
+    def test_revoke_nonexistent_logs_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Revoking a nonexistent key logs a warning, not just info."""
+        caplog.set_level("WARNING", logger="ruitong.admin")
+        with self._setup(monkeypatch) as client:
+            resp = client.delete(
+                "/v1/admin/keys/nonexistent-id",
+                headers={"X-API-Key": "admin-secret"},
+            )
+            assert resp.status_code == 404
+
+        assert any(
+            r.levelname == "WARNING" and "action=revoke_key" in r.message and "result=not_found" in r.message
+            for r in caplog.records
+        ), f"Expected WARNING audit log, got {[r.message for r in caplog.records]}"
+
+    def test_list_keys_logs_audit(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """GET /admin/keys logs action=list_keys with count."""
+        caplog.set_level("INFO", logger="ruitong.admin")
+        with self._setup(monkeypatch) as client:
+            # Create a key first so count > 0
+            client.post(
+                "/v1/admin/keys",
+                json={"name": "listed-key"},
+                headers={"X-API-Key": "admin-secret"},
+            )
+            resp = client.get("/v1/admin/keys", headers={"X-API-Key": "admin-secret"})
+            assert resp.status_code == 200
+
+        assert any(
+            "action=list_keys" in r.message and "count=" in r.message
+            for r in caplog.records
+        ), f"Expected list_keys audit log, got {[r.message for r in caplog.records]}"

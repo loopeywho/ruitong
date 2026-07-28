@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import hmac
+import logging
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..config import BridgeConfig
 from .keystore import KeyStore
+
+logger = logging.getLogger("ruitong.admin")
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -73,6 +76,11 @@ async def create_key(body: CreateKeyRequest, request: Request) -> dict:
     key_store = _get_key_store(request)
 
     key_id, plaintext = key_store.create_key(body.name)
+    logger.info(
+        "admin action=create_key key_id=%s name=%s principal=admin",
+        key_id,
+        body.name,
+    )
     return {
         "key_id": key_id,
         "plaintext_key": plaintext,
@@ -85,7 +93,9 @@ async def list_keys(request: Request) -> list[dict]:
     """List all API keys (metadata only — hashes are never exposed)."""
     _check_admin_key(request)
     key_store = _get_key_store(request)
-    return key_store.list_keys()
+    keys = key_store.list_keys()
+    logger.info("admin action=list_keys count=%d principal=admin", len(keys))
+    return keys
 
 
 @router.delete("/keys/{key_id}")
@@ -96,5 +106,7 @@ async def revoke_key(request: Request, key_id: str) -> dict:
 
     revoked = key_store.revoke_key(key_id)
     if not revoked:
+        logger.warning("admin action=revoke_key key_id=%s result=not_found principal=admin", key_id)
         raise HTTPException(status_code=404, detail=f"Key {key_id} not found")
+    logger.info("admin action=revoke_key key_id=%s result=success principal=admin", key_id)
     return {"revoked": True}
