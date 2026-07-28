@@ -4,11 +4,22 @@ from __future__ import annotations
 import hmac
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from ..config import BridgeConfig
 from .keystore import KeyStore
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
+
+
+class CreateKeyRequest(BaseModel):
+    """Validate admin create-key requests (P2.5)."""
+
+    name: str = Field(
+        ..., min_length=1, max_length=128, description="Human-readable key name"
+    )
+
+    model_config = {"extra": "forbid"}  # reject unknown fields
 
 
 def _check_admin_key(request: Request) -> None:
@@ -56,21 +67,16 @@ def _get_key_store(request: Request) -> KeyStore:
 
 
 @router.post("/keys")
-async def create_key(request: Request) -> dict:
+async def create_key(body: CreateKeyRequest, request: Request) -> dict:
     """Create a new API key.  Requires the admin key in X-API-Key header."""
     _check_admin_key(request)
     key_store = _get_key_store(request)
 
-    body = await request.json()
-    name: str = body.get("name", "")
-    if not name:
-        raise HTTPException(status_code=400, detail="Body must include 'name'")
-
-    key_id, plaintext = key_store.create_key(name)
+    key_id, plaintext = key_store.create_key(body.name)
     return {
         "key_id": key_id,
         "plaintext_key": plaintext,
-        "name": name,
+        "name": body.name,
     }
 
 

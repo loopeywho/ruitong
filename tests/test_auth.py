@@ -186,6 +186,36 @@ class TestAdminAPI:
         assert data["plaintext_key"].startswith("rt_")
         assert data["name"] == "my-key"
 
+    def test_create_key_rejects_empty_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty name returns 422 (P2.5)."""
+        client = self._setup_client(monkeypatch)
+        resp = client.post(
+            "/v1/admin/keys",
+            json={"name": ""},
+            headers={"X-API-Key": "admin-secret"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_create_key_rejects_long_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Name > 128 chars returns 422 (P2.5)."""
+        client = self._setup_client(monkeypatch)
+        resp = client.post(
+            "/v1/admin/keys",
+            json={"name": "x" * 129},
+            headers={"X-API-Key": "admin-secret"},
+        )
+        assert resp.status_code == 422, resp.text
+
+    def test_create_key_rejects_unknown_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Unknown fields in body return 422 (P2.5)."""
+        client = self._setup_client(monkeypatch)
+        resp = client.post(
+            "/v1/admin/keys",
+            json={"name": "valid-key", "extra_field": "bad"},
+            headers={"X-API-Key": "admin-secret"},
+        )
+        assert resp.status_code == 422, resp.text
+
     def test_list_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """List keys returns all keys with metadata."""
         client = self._setup_client(monkeypatch)
