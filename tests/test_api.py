@@ -154,6 +154,74 @@ class TestPortPreviewEndpoint:
         assert report["passed"] is True  # self-comparison always passes
 
 
+class TestCrossTenantIsolation:
+    """Cross-tenant isolation for async jobs (P1.5 fix)."""
+
+    ENV_VARS = {"RUITONG_ADMIN_KEY": "admin-secret", "RUITONG_API_KEY": "legacy-key"}
+
+    def _setup_client(self, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+        import importlib
+
+        for k, v in self.ENV_VARS.items():
+            monkeypatch.setenv(k, v)
+        monkeypatch.delenv("RUITONG_KEY_DB_PATH", raising=False)
+
+        import ruitong.main
+
+        importlib.reload(ruitong.main)
+
+        from ruitong.auth.keystore import KeyStore
+
+        ruitong.main.app.state.key_store = KeyStore(":memory:")
+        ruitong.main.app.state.config = ruitong.main.BridgeConfig.from_env()
+
+        return TestClient(ruitong.main.app)
+
+    def test_cross_tenant_get_returns_404(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Key B cannot read key A's job — gets 404 (not 403)."""
+        client = self._setup_client(monkeypatch)
+
+        # Create two keys via admin API
+        resp_a = client.post(
+            "/v1/admin/keys",
+            json={"name": "key-a"},
+            headers={"X-API-Key": "admin-secret"},
+        )
+        assert resp_a.status_code == 200
+        key_a = resp_a.json()["plaintext_key"]
+
+        resp_b = client.post(
+            "/v1/admin/keys",
+            json={"name": "key-b"},
+            headers={"X-API-Key": "admin-secret"},
+        )
+        assert resp_b.status_code == 200
+        key_b = resp_b.json()["plaintext_key"]
+
+        # Key A submits a job
+        create_resp = client.post(
+            "/v1/port/preview",
+            json={"model": "Qwen3-8B"},
+            headers={"X-API-Key": key_a},
+        )
+        assert create_resp.status_code == 202
+        job_id = create_resp.json()["job_id"]
+
+        # Key B tries to read key A's job — must get 404, not 403
+        b_read = client.get(
+            f"/v1/port/preview/{job_id}",
+            headers={"X-API-Key": key_b},
+        )
+        assert b_read.status_code == 404, f"Expected 404, got {b_read.status_code}: {b_read.text}"
+
+        # Key A can still read their own job
+        a_read = client.get(
+            f"/v1/port/preview/{job_id}",
+            headers={"X-API-Key": key_a},
+        )
+        assert a_read.status_code == 200
+
+
 class TestAuthMiddleware:
     """API key authentication."""
 

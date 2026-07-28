@@ -128,7 +128,8 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    store.create(job, model=req.model, target=req.target)
+    owner = getattr(request.state, "api_key_principal", "")
+    store.create(job, model=req.model, target=req.target, owner=owner)
 
     # Launch background task
     import asyncio
@@ -170,11 +171,16 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
 
 @router.get("/preview/{job_id}", response_model=JobInfo)
 async def get_port_job(job_id: str, request: Request) -> JobInfo:
-    """Poll the status and result of an async port job."""
+    """Poll the status and result of an async port job.
+
+    Scoped to the authenticated principal — cross-tenant reads return 404
+    (not 403, to avoid confirming the id exists).
+    """
     store = getattr(request.app.state, "job_store", None)
     if store is None:
         store = JobStore.default()
-    job = store.get(job_id)
+    owner = getattr(request.state, "api_key_principal", "")
+    job = store.get(job_id, owner=owner)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job

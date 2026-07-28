@@ -51,6 +51,7 @@ class JobStore:
             self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id     TEXT PRIMARY KEY,
+                     owner      TEXT NOT NULL DEFAULT '',
                     status     TEXT NOT NULL DEFAULT 'pending',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -64,14 +65,15 @@ class JobStore:
 
     # ── CRUD ─────────────────────────────────────────────────────────
 
-    def create(self, job: JobInfo, model: str = "", target: str = "") -> None:
+    def create(self, job: JobInfo, model: str = "", target: str = "", owner: str = "") -> None:
         """Insert a new job record."""
         with self._lock:
             self._conn.execute(
-                """INSERT INTO jobs (job_id, status, created_at, updated_at, model, target)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO jobs (job_id, owner, status, created_at, updated_at, model, target)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job.job_id,
+                    owner,
                     job.status.value,
                     job.created_at.isoformat(),
                     job.updated_at.isoformat(),
@@ -81,12 +83,21 @@ class JobStore:
             )
             self._conn.commit()
 
-    def get(self, job_id: str) -> JobInfo | None:
-        """Fetch a job by ID, or None if not found."""
+    def get(self, job_id: str, owner: str = "") -> JobInfo | None:
+        """Fetch a job by ID, or None if not found.
+
+        When *owner* is non-empty, scopes the lookup so only the owning
+        principal can see the job (returns None for cross-tenant reads).
+        """
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
-            ).fetchone()
+            if owner:
+                row = self._conn.execute(
+                    "SELECT * FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
         if row is None:
             return None
         return self._row_to_job(row)
@@ -125,6 +136,27 @@ class JobStore:
                 "SELECT COUNT(*) AS cnt FROM jobs WHERE status IN ('pending', 'running')"
             ).fetchone()
         return row["cnt"] if row else 0
+
+    def list_by_owner(self, owner: str) -> list[JobInfo]:
+        """Return all jobs owned by the given principal."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE owner = ? ORDER BY created_at DESC",
+                (owner,),
+            ).fetchall()
+        return [self._row_to_job(r) for r in rows]
+
+    def delete(self, job_id: str, owner: str) -> bool:
+        """Delete a job by ID only if owned by *owner*.
+
+        Returns True if a row was deleted, False if nothing matched.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM jobs WHERE job_id = ? AND owner = ?", (job_id, owner)
+            )
+            self._conn.commit()
+        return cur.rowcount > 0
 
     # ── Internal ─────────────────────────────────────────────────────
 
