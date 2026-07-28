@@ -389,3 +389,24 @@ when no path is given.  Tests must now pass `:memory:` explicitly for isolation.
 **Every `KeyStore`-like service must default to a file path, not `:memory:`** —
 otherwise a server restart is a data-loss event.  Use `:memory:` only as an
 explicit test parameter (`KeyStore(":memory:")`).
+
+## [2026-07-28] claude — Left a GPU billing for 12.6 hours while blocked on a human
+**What:** deployed an RTX 6000 Ada pod, then could not read its API key because
+RunPod's console stopped rendering. I flagged the $0.84/hr burn, offered to
+terminate, and asked Boss how to unblock — then **left the pod running** while
+waiting for the answer. The answer arrived 12.6 hours later.
+**Cost:** $10.58 of the $11.04 spent that day, for a pod that computed nothing.
+The actual measurement — the two-GPU comparison that produced D10 — cost $0.51.
+**Why wrong:** I treated "I asked and flagged the cost" as discharging the
+responsibility. It doesn't. A question to a human has unbounded latency: they
+sleep, they work, they miss the message. Meanwhile the meter runs. Offering to
+terminate is not terminating.
+**Rule:** **when blocked on a human, stop the billing resource first, then
+ask.** Rented state that can be recreated in ~2 minutes (a pod re-pulling a
+cached image) is never worth holding open across an unbounded wait. Reserve
+"leave it running" for when restart is genuinely expensive *and* the wait is
+genuinely short — and even then, say the deadline out loud.
+**Also:** I estimated the spend at "under $1" in my own report and was wrong by
+11x, because I reasoned from *my* elapsed turns rather than from wall-clock
+timestamps. Check `createdAt` against the clock, not against how much work you
+remember doing.
