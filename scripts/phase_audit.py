@@ -66,25 +66,36 @@ def build_prompt() -> str:
             sections.append(f"## File: {rel}")
             sections.append(f.read_text())
 
-    # Add test output
-    sections.append("## Test & lint output")
-    sections.append("```")
-    sections.append("(pytest and mypy output would go here)")
-    sections.append("```")
+    # Get real test output
+    test_output = "(pytest and mypy output not available)"
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["uv", "run", "--extra", "dev", "pytest", "-q", "--tb=short", "-Wignore"],
+            capture_output=True, text=True, timeout=60, cwd=REPO_ROOT,
+        )
+        test_output = result.stdout + result.stderr
+    except Exception as e:
+        test_output = f"(error running tests: {e})"
 
     prompt = (
         "You are auditing Ruitong Bridge, a CANN/CUDA bridge middleware for the Chinese AI market. "
-        "The codebase below is Phase 4 (equivalence harness CLI). "
-        "Audit for: correctness, security, edge cases, and test adequacy. "
+        "The codebase below is Phase 5 (async REST API: key management + CNY pricing + auth middleware). "
+        "Audit for: correctness, security, edge cases, test adequacy, and code quality. "
         "For each finding, include: severity (P1/P2/P3), the exact file path, "
         "the function name, what's wrong, and how to fix it. "
         "Be precise about line numbers by reading the actual files. "
         "If you cannot determine the exact line number, say 'line ~N' rather than fabricating. "
         "Verdict: PASS, CONDITIONAL PASS, or FAIL. "
-        "If the harness has any defect that causes passed=True when actual comparison "
-        "did not happen or failed, the verdict is FAIL.\n\n"
+        "Key areas: multi-key auth with HMAC-SHA256 key hashing, SQLite-backed KeyStore, "
+        "admin API (CRUD keys), auth middleware, and CNY pricing module. "
+        "Check that security-sensitive operations (admin key verification, key hashing, "
+        "rate limiting) are robust and that pricing endpoint has proper auth.\n\n"
         "Codebase:\n\n"
         + "\n".join(sections)
+        + "\n\n## Test & lint output\n```\n"
+        + test_output
+        + "\n```"
     )
     return prompt
 

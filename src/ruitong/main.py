@@ -9,13 +9,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .api.router import router as port_router
+from .auth.router import router as admin_router
+from .auth.keystore import KeyStore
 from .backends.fake import FakeAscend, FakeCuda
 from .config import BridgeConfig
 from .errors import BackendError, BackendUnavailable, ModelNotFound
 from .jobs.persistence import JobStore
+from .pricing.router import router as pricing_router
 from .registry import BackendRegistry
 from .router import Router
-from .schemas import ChatRequest
 
 # ── Exempt paths (no API key required) ───────────────────────────────
 AUTH_EXEMPT_PATHS = {"/v1/health", "/v1/models", "/docs", "/openapi.json", "/redoc"}
@@ -35,6 +37,8 @@ async def lifespan(app: FastAPI):
     app.state.router = Router(registry=registry, config=config)
     app.state.config = config
     app.state.job_store = JobStore(db_path=config.job_db_path)
+    app.state.key_store = KeyStore(db_path=config.key_db_path)
+    app.state.pricing_config = config.pricing_config
     app.state.rate_limit_buckets = {}  # dict[str, list[float]]
     app.state.rate_limit_counter = 0
     yield
@@ -48,6 +52,12 @@ app = FastAPI(
 
 # Phase 5 — Port API
 app.include_router(port_router)
+
+# Admin API — key lifecycle management
+app.include_router(admin_router)
+
+# Pricing API — CNY-native pricing info
+app.include_router(pricing_router)
 
 
 # ── Health / discovery endpoints ──────────────────────────────────────
@@ -101,7 +111,7 @@ def _config_for(request: Request) -> BridgeConfig:
 async def payload_size_middleware(request: Request, call_next):
     """Reject requests with oversized payloads (Content-Length header).
 
-    Number 2 in the execution order (runs after auth, before rate-limit).
+    Number 3 in the execution order (runs after auth + rate-limit).
     """
     config = _config_for(request)
 
@@ -133,7 +143,7 @@ async def payload_size_middleware(request: Request, call_next):
 async def rate_limit_middleware(request: Request, call_next):
     """In-memory rate limiter per authenticated principal (or IP fallback).
 
-    Number 3 in the execution order (runs after auth + payload check).
+    Number 2 in the execution order (runs after auth, before payload check).
     Keys on the authenticated principal set by auth_middleware, so
     unauthenticated traffic never reaches the limiter (fixes H2, S4).
 
@@ -218,20 +228,59 @@ async def auth_middleware(request: Request, call_next):
 
     Always sets request.state.api_key_principal so downstream middleware
     can key on the authenticated principal rather than IP (S4 fix).
+
+    Multi-key support:
+    - When admin_key is set: authenticate against KeyStore, falling back
+      to direct admin_key comparison.
+    - When admin_key is empty: fall back to legacy single-key auth
+      against config.api_key.
     """
     config = _config_for(request)
+    exempt = request.url.path in AUTH_EXEMPT_PATHS
 
-    if config.api_key and request.url.path not in AUTH_EXEMPT_PATHS:
+    # Auth is required when api_key OR admin_key is set
+    has_auth = bool(config.api_key) or bool(config.admin_key)
+
+    if has_auth and not exempt:
         provided = request.headers.get("X-API-Key", "")
-        if not hmac.compare_digest(
-            provided.encode("utf-8", "surrogateescape"),
-            config.api_key.encode("utf-8"),
-        ):
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
-            )
-        request.state.api_key_principal = provided
+
+        if config.admin_key:
+            # KeyStore mode: try KeyStore first, then admin key directly.
+            key_store = getattr(request.app.state, "key_store", None)
+            authenticated = False
+
+            if key_store is not None and provided:
+                key_id = key_store.authenticate(provided)
+                if key_id is not None:
+                    request.state.api_key_principal = key_id
+                    authenticated = True
+
+            if not authenticated and provided:
+                # Fall back to direct admin_key check.
+                if hmac.compare_digest(
+                    provided.encode("latin-1"),
+                    config.admin_key.encode("utf-8"),
+                ):
+                    request.state.api_key_principal = "admin"
+                    authenticated = True
+
+            if not authenticated:
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
+                )
+        else:
+            # Legacy: single-key auth against config.api_key
+            if not provided or not hmac.compare_digest(
+                provided.encode("latin-1"),
+                config.api_key.encode("utf-8"),
+            ):
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "Unauthorized", "detail": "Missing or invalid X-API-Key header"},
+                )
+            request.state.api_key_principal = provided
+
     else:
         # No auth configured (dev mode) — all request share "anonymous"
         request.state.api_key_principal = "anonymous"

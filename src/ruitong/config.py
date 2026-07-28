@@ -6,6 +6,7 @@ Construct one instance at application startup and pass it down explicitly.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -63,8 +64,11 @@ class BridgeConfig:
     # Timeout in seconds for inference requests.
     request_timeout: float = DEFAULT_REQUEST_TIMEOUT_S
 
-    # API key for authenticating requests. Empty = auth disabled.
+    # Legacy API key for authenticating requests. Empty = auth disabled.
     api_key: str = ""
+
+    # Admin key for API key management endpoints. Empty = admin API disabled.
+    admin_key: str = ""
 
     # Maximum payload size in bytes. Default 10 MB.
     max_payload_bytes: int = 10 * 1024 * 1024
@@ -75,12 +79,28 @@ class BridgeConfig:
     # Path to the job persistence SQLite database. Empty = in-memory.
     job_db_path: str = ""
 
+    # Path to the key store SQLite database. Defaults to ./ruitong-keys.db.
+    key_db_path: str = ""
+
+    # Pricing configuration (raw dicts keyed by model name).
+    pricing_config: dict[str, dict] = field(default_factory=dict)
+
     @classmethod
     def from_env(cls) -> BridgeConfig:
         """Build a config from the current environment.
 
         Read at call time so tests and runtime overrides both work.
         """
+        raw_pricing = os.environ.get("RUITONG_PRICING", "")
+        pricing: dict[str, dict] = {}
+        if raw_pricing:
+            try:
+                pricing = json.loads(raw_pricing)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"RUITONG_PRICING must be valid JSON, got {raw_pricing!r}"
+                ) from exc
+
         return cls(
             cuda_base_url=os.environ.get("RUITONG_CUDA_BASE_URL", ""),
             ascend_base_url=os.environ.get("RUITONG_ASCEND_BASE_URL", ""),
@@ -95,6 +115,7 @@ class BridgeConfig:
                 "RUITONG_REQUEST_TIMEOUT_S", DEFAULT_REQUEST_TIMEOUT_S
             ),
             api_key=os.environ.get("RUITONG_API_KEY", ""),
+            admin_key=os.environ.get("RUITONG_ADMIN_KEY", ""),
             max_payload_bytes=_int_from_env(
                 "RUITONG_MAX_PAYLOAD_BYTES", 10 * 1024 * 1024
             ),
@@ -102,4 +123,6 @@ class BridgeConfig:
                 "RUITONG_RATE_LIMIT_PER_MINUTE", 30
             ),
             job_db_path=os.environ.get("RUITONG_JOB_DB_PATH", ""),
+            key_db_path=os.environ.get("RUITONG_KEY_DB_PATH", ""),
+            pricing_config=pricing,
         )

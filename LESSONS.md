@@ -336,3 +336,56 @@ The only thing that detects it is contact with a real system. So:
 3. Make the regression suite run against that corpus, not against fixtures.
 4. Mutation-test the suite: break the thing on purpose and confirm the tests
    fail. A test that cannot fail is documentation, not a test.
+
+## [2026-07-28] Opus 5 — Phase 5 (security gate + CNY pricing) audit
+
+**Context:** Qwen built the security gate (KeyStore + admin API) and CNY pricing
+module.  Runtimes: ~10 min for Qwen build (subagent timed out yet delivered
+correct files), ~6.4 min for Opus 5 audit.  236 tests, mypy clean.
+
+### P1 findings (all fixed before commit)
+
+**P1.1 — Admin API open by default.** `_check_admin_key` fell through to
+`hmac.compare_digest("","")` when `admin_key` was empty, which is `True`.
+**Fix:** fail closed — if `admin_key` is empty, return 503 "Admin API disabled".
+No legacy fallback branch that reuses `api_key` as the admin key.
+
+**P1.2 — API key = admin key in legacy mode.** The `else` branch of
+`_check_admin_key` used `config.api_key` as the admin comparison, meaning any
+data-plane bearer key also had admin access. **Fix:** deleted the legacy branch
+entirely (covered by P1.1).
+
+**P1.4 — KeyStore defaulted to `:memory:`.** `config.key_db_path` was `""` and
+`KeyStore.__init__` used `:memory:` when path was empty, so every server restart
+lost all keys. **Fix:** made `KeyStore.__init__` default to `"ruitong-keys.db"`
+when no path is given.  Tests must now pass `:memory:` explicitly for isolation.
+
+### P2 findings (pre-existing, noted but not blocking)
+
+- **P2.1 — Non-ASCII encoding in HMAC comparison.** `utf-8` with
+  `surrogateescape` on header-provided values can produce mismatched digest
+  bytes. **Fix:** use `latin-1` for header-derived bytes (HTTP headers are
+  ISO-8859-1), keep `utf-8` for stored keys.
+- **P2.3 — Prefix only stored in `__init__`.** Fixed by storing `plaintext[:11]`
+  as the prefix column value.
+- **P2.4 — `update_last_used` called `commit()` on every `authenticate()`.**
+  Fixed by debouncing to ~5 min via `WHERE last_used_at < datetime('now', '-5
+  minutes')`.
+- **P2.5 — Missing index on `key_hash`.** Added `CREATE UNIQUE INDEX`.
+- **P2.12 — Middleware ordering comments wrong.** `payload_size` said "Number 2",
+  `rate_limit` said "Number 3". Fixed.
+
+### Pre-existing (not introduced by this PR)
+
+- **P1.5 — No job ownership / cross-tenant read.** The `jobs` table has no owner
+  column.  Introduced in Phase 4, now reachable via the multi-key auth path.
+  Needs a schema migration in a future round.
+- **P1.6 — Self-comparison returns `passed: true`.** The `/v1/port/comparison`
+  endpoint returns `passed: true` even for identical-container comparisons.
+  Introduced in Phase 4.
+
+### New rule from this round
+
+**Every `KeyStore`-like service must default to a file path, not `:memory:`** —
+otherwise a server restart is a data-loss event.  Use `:memory:` only as an
+explicit test parameter (`KeyStore(":memory:")`).

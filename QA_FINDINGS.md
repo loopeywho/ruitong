@@ -1,180 +1,373 @@
 # Ruitong Bridge — Phase 4 Audit (Claude Opus 5)
 
-_Audited: 2026-07-26 19:23 UTC | Model: anthropic/claude-opus-5_
+*Audited: 2026-07-28 01:47 UTC | Model: anthropic/claude-opus-5*
+*Input tokens: 163181 | Output tokens: 30994 | Duration: 385s*
 
-# Ruitong Bridge — Phase 4 Audit (Equivalence Harness CLI)
+# Ruitong Bridge — Phase 5 Audit (async REST API: keys, pricing, auth)
 
-**Status: ❌ FAIL**
+**Scope reviewed:** `src/ruitong/auth/keystore.py`, `src/ruitong/auth/router.py`, `src/ruitong/main.py` (middleware stack), `src/ruitong/pricing/*`, `src/ruitong/api/*`, `src/ruitong/config.py`, `tests/test_auth.py`, `tests/test_pricing.py`, `tests/test_api.py`.
 
-The harness is well-structured and reads cleanly, but it does not currently do what it claims. Four independent defects cause the harness to report `passed: YES` / exit `0` in situations where nothing was actually compared or where everything failed; two more make the top-k metrics semantically meaningless; and the "deterministic" fixture is not deterministic across processes. Because the deliverable's entire value is *trustworthy pass/fail signal*, these are blockers rather than polish.
+**Test/lint state as given:** `235 passed`. That is consistent with what I found: every P1 below is invisible to this suite because the suite never constructs the configuration in which it fires, and in two cases the suite *asserts the buggy behaviour*.
 
-Test count (172) and coverage (97%) are not evidence of correctness here — several of the assertions in the new tests are vacuously true, and no test asserts the *sign* of a comparison (that a divergent pair fails).
-
----
-
-## P1 — Must Fix (deploy blockers)
-
-**1. Exit code is always 0, even when `passed is False`**
-- Finding: `main()` / `_run_port()` never propagate the verdict to the process exit status. A CI job running `ruitong port model --target ascend` is green regardless of outcome. This defeats the primary use of an equivalence harness.
-- File: `src/ruitong/cli.py` (`main`, `_run_port` — end of function)
-- Fix: `main()` returns `int`; `_run_port` returns `0` if `report.passed` else `1` (suggest `2` for infrastructure/error-mode reports so CI can distinguish "diverged" from "couldn't run"). Update `pyproject` entry point to `sys.exit(main())`. Add tests asserting `returncode != 0` for a divergent comparison.
-- Severity: HIGH
-
-**2. `passed=True` when every prompt errored (silent pass on total failure)**
-- Finding: in `EquivalenceRunner.run`, backend exceptions are swallowed into `warnings` and a `mode="error"` result. If *all* prompts fail, `all_cosines` is empty, every metric is `None`, all four threshold checks are skipped, and `report.passed` retains its dataclass default `True`. Report says `mode: task_parity`, `Passed: YES`. `test_model_not_found` covers this path and asserts `len(report.warnings) >= 0` — which is always true — so the defect is tested *in* rather than tested out.
-- File: `src/ruitong/equivalence/runner.py` (`run`, error handler + threshold block); `tests/test_equivalence.py::test_model_not_found`
-- Fix: default `passed=False` and set it `True` only after at least one metric was computed and all applicable thresholds held. Add an explicit invariant: `if not per_prompt or any(r.mode == "error" for r in per_prompt): passed = False`. Add a `status` field (`ok` / `diverged` / `incomplete`). Rewrite the test to assert `report.passed is False`, `report.warnings != []`, and `per_prompt_results[0].mode == "error"`.
-- Severity: HIGH
-
-**3. `--target cuda` / `--target ascend` compare a backend against itself → tautological PASS**
-- Finding: `_make_runner` returns `EquivalenceRunner(cuda, cuda)`. The same object is invoked twice per prompt, so cosine is exactly 1.0, diff 0.0, and the report always says `Passed: YES`. `test_target_cuda_produces_report` asserts `data["passed"] is True`, locking the tautology into the test suite. An operator running `ruitong port Qwen3-8B --target ascend` will reasonably read the output as "Ascend matches CUDA".
-- File: `src/ruitong/cli.py` (`_make_runner`); `tests/test_cli.py::test_target_cuda_produces_report`
-- Fix: decide and implement one semantic: (a) single-target mode = *baseline capture* — run one backend, emit logprobs/responses, no comparison and no `passed` field at all; or (b) single-target mode = compare that backend against a stored golden baseline file (`--baseline report.json`). Either way, never emit `passed: true` from a self-comparison. If neither is in scope for Phase 4, reject `--target cuda|ascend` with a clear error and ship only `auto`.
-- Severity: HIGH
-
-**4. `top_k_set_agreement` compares float *values*, so it is 0.0 for any non-bit-identical pair**
-- Finding: the function Jaccards the *set of top-k values*. Two backends differing by 1e-7 produce completely disjoint value sets → Jaccard 0.0, versus `TOP5_MIN = 0.95`. This metric can therefore never pass for real hardware, and in the current auto-mode fixture it is the *only* failing metric — i.e. 100% of the harness's "detected divergence" is an artifact of a broken metric. The docstring rationalises this as "measuring how much the actual logprob mass overlaps", which set-intersection of floats does not measure. Set-ification also silently dedups repeated values before/after truncation.
-- File: `src/ruitong/equivalence/metrics.py` (`top_k_set_agreement`)
-- Fix: compare top-k **token index sets** (`|A∩B| / |A∪B|` over indices), which is the standard top-k agreement metric. If value-mass overlap is genuinely wanted, implement it as tolerance-based (sum of `min(p_a, p_b)` over aligned tokens, or L1 distance over the top-k probability mass) — never as exact float set membership. Add a test with values perturbed by 1e-9 asserting agreement ≈ 1.0.
-- Severity: HIGH
-
-**5. Top-1 agreement is computed over per-position scalars, not over token distributions; `top_logprobs` is never used**
-- Finding: `Choice.logprobs` is a flat `list[float]` of per-position chosen-token logprobs (3 entries in the fakes). `top_k_agreement(logs_a, logs_b, k=1)` wraps that into one row and asks "which *position* has the highest logprob" — it ranks positions against each other, not candidate tokens at a position. That is not top-1 token agreement and carries no equivalence meaning. Meanwhile `Choice.top_logprobs: list[dict[int, float]]` — the actual per-position token→logprob distribution the fakes carefully generate — is read by nothing in the runner.
-- File: `src/ruitong/equivalence/runner.py` (`run`, Mode 1 block); `src/ruitong/equivalence/metrics.py` (`top_k_agreement`)
-- Fix: compute top-1/top-5 agreement from `top_logprobs` (per position: argmax token id equality; top-5 index-set Jaccard), and compute cosine/max-abs-diff over the aligned per-position `logprobs` vector. Assert `len(top_logprobs) == len(logprobs)` on ingest. If `top_logprobs` is absent, report top-k as `None` rather than fabricating a number from the wrong tensor.
-- Severity: HIGH
-
-**6. Metric computation sits outside the try/except → uncaught `ValueError` crashes the run**
-- Finding: `_ensure_lists` raises `ValueError` on length mismatch, but the calls to `cosine_similarity` et al. are outside the per-prompt `try`. Two real backends returning different token counts (different tokenizer, different stop handling, one truncated) — the expected case — produce an unhandled traceback out of `runner.run()` through `asyncio.run()` to the user, with no report and no partial results.
-- File: `src/ruitong/equivalence/runner.py` (`run`, Mode 1 block, lines after `logs_a`/`logs_b` extraction)
-- Fix: wrap metric computation in its own `try/except (ValueError, ZeroDivisionError)`, record `mode="mismatch"` + warning, and force `passed=False`. Add a test with two fakes returning different-length logprobs.
-- Severity: HIGH
-
-**7. Fake backends are non-deterministic across processes (`hash()` in the seed)**
-- Finding: `_fake_logprobs(f"{req.model}-cuda-{hash(req.model) % 1000}")`. `hash()` on `str` is salted per interpreter by `PYTHONHASHSEED`, so every CLI invocation produces different logprob values and a different `report.json`. The module docstring and the Phase 4 charter both promise *deterministic* comparison; the fixture that underpins every test violates it. In-process tests don't catch it because both fakes share the same salt.
-- File: `src/ruitong/backends/fake.py` (`FakeCuda.chat`, `FakeAscend.chat`)
-- Fix: remove `hash()`; seed from stable content only (e.g. `f"{req.model}-cuda"` plus a digest of the rendered prompt). Add a regression test that runs the CLI twice via subprocess and asserts the two `report.json` files' `metrics` and `per_prompt_results` are byte-identical.
-- Severity: HIGH
-
-**8. Mode 2 ("task-level parity") is documented but not implemented**
-- Finding: when logprobs are missing, the runner sets `mode="task_parity"`, appends a warning, and performs **no comparison at all** — `cuda_response` and `ascend_response` are captured but never compared, no metric is produced, no threshold applied. Combined with #2, a run where neither backend returns logprobs reports `Passed: YES`. `EquivalenceRunner.run`'s docstring explicitly claims "Falls back to Mode 2 (task-level parity)".
-- File: `src/ruitong/equivalence/runner.py` (`run`, `else` branch)
-- Fix: implement it (exact-match rate and/or normalised edit distance over responses, with its own `TASK_PARITY_MIN` threshold and aggregate metric key), or delete the claim from the docstrings and hard-fail (`passed=False`) with a clear "logprobs unavailable — cannot establish equivalence" warning. Add a fake variant returning `logprobs=None` and test both the metric and the verdict.
-- Severity: HIGH
+Line numbers are given as `line ~N` where I counted from the file content rather than from a checkout.
 
 ---
 
-## P2 — Should Fix
+## Verdict: **FAIL**
 
-**9. `-inf` / NaN logprobs silently pass every threshold and emit invalid JSON**
-- Finding: real logprobs contain `-inf`. Cosine and max-abs-diff then yield `nan`; `nan < 0.99` is `False`, so all four threshold checks pass and `passed` stays `True`. `json.dump` writes bare `NaN`/`Infinity` literals, which are invalid JSON and rejected by strict parsers (Go, Java, `json.loads(..., parse_constant=...)`-strict consumers).
-- File: `src/ruitong/equivalence/metrics.py`; `src/ruitong/equivalence/runner.py` (threshold block); `src/ruitong/cli.py` (`json.dump`)
-- Fix: validate inputs with `math.isfinite` in `_ensure_lists` (either reject, or clamp `-inf` to a documented floor like `-100.0` and record a warning). Guard threshold checks with `math.isnan(...) → passed = False`. Pass `allow_nan=False` to `json.dump` and handle the resulting `ValueError`.
-- Severity: MEDIUM
+Three of the P1s are in the security-sensitive path the brief specifically asks about (admin key verification, rate limiting), one is a data-loss defect in the headline feature (SQLite KeyStore is in-memory by default), and two are false-PASS defects in the equivalence report the business sells. Per `DECISIONS.md` D4 the API is built-but-not-deployed, so these are launch gates rather than live incidents — but P1.1 and P1.2 are exploitable in the *default* and the *most likely upgrade-path* configurations respectively, and must not survive into a commit that anyone can `uvicorn`.
 
-**10. `max_absolute_difference` aggregates by *mean of row maxima*, and the report averages again across prompts**
-- Finding: a single catastrophic position (diff 10.0) among 100 clean ones is averaged down to 0.1 and passes `MAX_ABS_DIFF_MAX = 0.05`… or hides entirely. For a gate metric named "max", mean aggregation is the wrong operator and the name actively misleads.
-- File: `src/ruitong/equivalence/metrics.py` (`max_absolute_difference`); `src/ruitong/equivalence/runner.py` (aggregate `metrics` dict)
-- Fix: return the true max for batched input; aggregate across prompts with `max`, not `mean`. If a mean is wanted too, expose it as a separate `mean_absolute_difference` key. Aggregate cosine/top-k with both mean **and** min so worst-case is visible.
-- Severity: MEDIUM
-
-**11. Thresholds are not actually configurable, and `thresholds_used` is decorative**
-- Finding: `Thresholds` holds class attributes; the runner reads `Thresholds.COSINE_MIN` directly rather than `self`/`report.thresholds_used`. Constructing `EquivalenceReport(thresholds_used=CustomThresholds())` changes the JSON output but not the verdict — a trap. No CLI flags to override. The provenance of 0.99/0.05/0.99/0.95 is undocumented.
-- File: `src/ruitong/equivalence/runner.py` (`Thresholds`, `run` threshold block)
-- Fix: make `Thresholds` a `@dataclass(frozen=True)` with instance fields, accept it in `EquivalenceRunner.__init__`, and evaluate against the instance. Add `--cosine-min/--max-abs-diff/--top1-min/--top5-min` (or `--thresholds thresholds.json`). Document where the numbers come from.
-- Severity: MEDIUM
-
-**12. Prompts, `max_tokens`, and `seed` are hardcoded and unsurfaced**
-- Finding: `_default_prompts` hardcodes three English prompts; `max_tokens=1` is buried in the runner; `seed` is never set on `ChatRequest` (so a real backend is free to be nondeterministic); `temperature` relies on the schema default. An equivalence harness whose comparison set cannot be changed is not usable for the real porting workflow, and `max_tokens=1` makes the (unimplemented) task-parity mode compare single tokens.
-- File: `src/ruitong/cli.py` (`_default_prompts`, `_run_port`); `src/ruitong/equivalence/runner.py` (`run`)
-- Fix: add `--prompts-file` (one prompt per line or JSONL) and `--max-tokens`; pass an explicit `--seed` (default 0) into `ChatRequest`; record prompts/max_tokens/seed/temperature in the report so a run is reproducible from its own artifact.
-- Severity: MEDIUM
-
-**13. Fake logprobs ignore the prompt, and the injected divergence is the least-detectable perturbation**
-- Finding: `_fake_logprobs` is seeded only by the model name, so all three prompts yield identical logprobs — the per-prompt table is three copies of one row, and the harness cannot demonstrate detection of prompt-dependent divergence. Worse, the cuda/ascend divergence is a *uniform additive shift* (`-0.001` vs `-0.012`), which preserves ranking exactly and barely perturbs cosine. The fixture therefore cannot exercise the failure modes that matter (rank flips, tail truncation, `-inf` mismatch, length mismatch), which is why every P1 above survived 172 tests.
-- File: `src/ruitong/backends/fake.py` (`_fake_logprobs`, `chat`, `_CUDA_OFFSET`/`_ASCEND_OFFSET`)
-- Fix: seed from `(model, prompt)`. Add configurable perturbation modes to the fakes — `identical`, `noise(eps)`, `rank_flip(n)`, `truncated`, `neg_inf_mismatch`, `length_mismatch` — and add tests asserting the expected verdict for each. Golden-value test for the auto comparison (exact metric values + `passed is False`).
-- Severity: MEDIUM
-
-**14. `_fake_logprobs` slice-wrap is still off-by-one; comment claims otherwise**
-- Finding: the guard is `if idx >= raw_len` *after* incrementing, so at `idx == 58` a perfectly valid 6-char pair is discarded and the counter re-reads from offset 0, colliding with position 0's bytes (duplicate token ids collapse in the `top5` dict, silently yielding <5 entries). The 12-char `chunk` read has **no** wrap handling at all, so `count > 3` can produce a short or empty slice and `int("", 16)` raises. The comment "Single linear counter avoids slice-wrap bugs" is false.
-- File: `src/ruitong/backends/fake.py` (`_fake_logprobs`)
-- Fix: replace the ad-hoc hex-window arithmetic with a seeded `random.Random(seed)` (deterministic, unbounded, no wrap logic), or use `hashlib.shake_256(seed).digest(n_bytes_needed)` sized from `count`. Assert `len(top5) == 5`. Add a test at `count=1, 3, 8, 32`.
-- Severity: MEDIUM
-
-**15. `open()` without `encoding="utf-8"` in a China-market tool**
-- Finding: `open(args.output, "w")` uses the platform default encoding — `cp936/GBK` on Chinese Windows. `ensure_ascii=True` masks it today, but any future `ensure_ascii=False` or any prompt/response echoed to stdout in Chinese will raise `UnicodeEncodeError` on the primary target platform.
-- File: `src/ruitong/cli.py` (`_run_port`, report write)
-- Fix: `open(args.output, "w", encoding="utf-8")`; consider `ensure_ascii=False` for readable Chinese in reports and reconfigure stdout/stderr to UTF-8 at entry.
-- Severity: MEDIUM
-
-**16. Several new tests assert nothing**
-- Finding: `assert len(report.warnings) >= 0` (always true); `assert "cosine_sim" in pp or "cuda_logprobs" in pp` (both keys always present); `test_auto_compare` has its actual expectation as a comment ("likely fail thresholds"); no test asserts `passed is False` anywhere; no test asserts an exit code other than 0; `--target` invalid value, unwritable `--output` (the `OSError` branch), and unknown-model-via-CLI are untested.
-- File: `tests/test_equivalence.py` (`test_model_not_found`, `test_auto_compare`); `tests/test_cli.py` (`test_per_prompt_results_in_report`, `test_warnings_list_present`)
-- Fix: replace with concrete assertions; add negative-path tests: `--target bogus` → rc 2, `--output /nonexistent/dir/x.json` → rc 1 + "Cannot write report" on stderr, divergent pair → rc 1.
-- Severity: MEDIUM
-
-**17. Coverage figure for `cli.py` is likely not real**
-- Finding: all CLI tests run the code in a child process (`subprocess.run([sys.executable, "-m", "ruitong.cli"])`). Unless `coverage` is configured with `--parallel-mode` + `COVERAGE_PROCESS_START` and a `sitecustomize` hook, none of those lines are recorded — so the reported 97% either excludes `cli.py` or reflects import-only coverage, and the "97% at equivalence/" claim needs re-verification for the branches flagged in #2/#6/#8.
-- File: test harness / `pyproject.toml` coverage config
-- Fix: enable subprocess coverage, or add in-process tests that call `main(argv=[...])` directly (it already accepts `argv`) and assert on `capsys` + `SystemExit.code`. Keep one subprocess smoke test for the console-script wiring.
-- Severity: MEDIUM
-
-**18. `PerPromptResult` hardcodes `cuda_*` / `ascend_*` field names on a generic A/B runner**
-- Finding: the runner is deliberately generic (`backend_a`/`backend_b`, with `backend_a_name` properties that are then never used), but the result and JSON schema say `cuda_logprobs`/`ascend_logprobs`. In `--target ascend` mode, `cuda_logprobs` contains Ascend data. Report consumers will be misled.
-- File: `src/ruitong/equivalence/runner.py` (`PerPromptResult`, `to_dict`)
-- Fix: rename to `a_*`/`b_*` (or `left_*`/`right_*`) and emit `backend_a: "cuda"`, `backend_b: "ascend"` once at report level, using the existing name properties.
-- Severity: MEDIUM
-
-**19. Degenerate-shape handling in `_ensure_lists` is inconsistent**
-- Finding: `[[]]` vs `[[]]` passes validation (`inner_len == 0`); `cosine_similarity` then silently returns `0.0` (indistinguishable from "orthogonal"), while `max_absolute_difference` raises a bare `max() arg is an empty sequence` — an internal error message leaking to the user. `isinstance(a[0], (int, float))` also accepts `bool`. Mixed nesting (`[1.0, 2.0]` vs `[[1.0],[2.0]]`) is only caught incidentally by the outer length check.
-- File: `src/ruitong/equivalence/metrics.py` (`_ensure_lists`)
-- Fix: reject `inner_len == 0` with `ValueError("Inner vectors must not be empty")`; validate that all elements of every row are `int|float` and finite; exclude `bool`.
-- Severity: MEDIUM
-
-**20. CLI-constructed fakes always contain the requested model**
-- Finding: `FakeCuda(model_ids=[model])` guarantees `ModelNotFound` can never fire from the CLI, so the CLI's most likely real-world error (model not served by one side) is unreachable and unexercised. It also silently discards the fakes' default catalogues.
-- File: `src/ruitong/cli.py` (`_make_runner`)
-- Fix: use the fakes' default model lists (or a `--fake-models` flag), let `ModelNotFound` surface, and add a CLI test for the not-found path with a nonzero exit code and an actionable message listing available models.
-- Severity: MEDIUM
+Path to CONDITIONAL PASS: fix P1.1–P1.5 and add the four tests named in §T1.
 
 ---
 
-## P3 — Polish / Future
+# P1 findings
 
-- **`_ensure_lists` launders types through `Any`**, so mypy validates nothing inside the metric functions despite the precise public signatures. Consider overloads or a narrow `TypeGuard`/normalisation helper returning a distinct `Matrix = list[list[float]]` type. *(`metrics.py`)* — LOW
-- **`print(f"=== Ruitong Equivalence Report ===")`** — f-string with no placeholders (ruff F541). *(`cli.py`, `_run_port`)* — LOW
-- **`print(f"Prompt: {report.total_prompts}")`** — singular label on a count reads like it's about to print the prompt text. Use `Prompts:`. Also align column widths with the metric block. *(`cli.py`)* — LOW
-- **`report.mode` is `"logprob"` if *any* prompt produced cosines**, so a run where 1/50 prompts had logprobs is labelled `logprob`. Add `"mixed"`, or report per-mode counts. *(`runner.py`)* — LOW
-- **`main()` silently no-ops on an unrecognised command** (`if args.command == "port":` with no `else`). Add `else: _print_error(...)` so future subcommands can't be forgotten into a 0-exit no-op. *(`cli.py`)* — LOW
-- **No `--version` / `--quiet` / `--json-only`**; the human summary and the "Report written to …" line both go to stdout, so `ruitong port … | jq` isn't possible. Consider `--format json` writing to stdout. *(`cli.py`)* — LOW
-- **Full logprob arrays are embedded per prompt in the JSON report.** Fine for 3 floats; at real vocab/sequence sizes this is megabytes per prompt. Add `--include-tensors` (default off) or write tensors to a sidecar `.npz`. *(`runner.py::to_dict`)* — LOW
-- **`tests/test_cli.py` docstring claims it "tests the actual CLI entry point configured in pyproject.toml"** but invokes `python -m ruitong.cli`, which exercises the `__main__` guard, not the console script. Either add one test that shells out to `ruitong` (installed) or fix the docstring. *(`tests/test_cli.py`)* — LOW
-- **`Choice.logprobs: list[float] | None` is commented "OpenAI-compatible"** but OpenAI's shape is an object with a `content` array of token/logprob/top_logprobs entries. Reword the comment as a documented Ruitong simplification, or align the schema before a real backend lands. Also note `dict[int, float]` keys become strings after a JSON round-trip. *(`schemas.py`)* — LOW
-- **`top_k_agreement`'s docstring says "top-k token ranks agree"** but it compares unordered index sets, ignoring order within k. Tie-breaking is index-order (stable sort) — deterministic, worth stating explicitly. *(`metrics.py`)* — LOW
-- **Backends are awaited strictly sequentially** per prompt. Deliberate and correct for determinism/hardware contention — worth a comment so a future contributor doesn't "optimise" it with `asyncio.gather`. *(`runner.py::run`)* — LOW
-- **`backend_a_name`/`backend_b_name` properties are dead code** (only exercised by a test). Wire them into the report per #18 or remove. *(`runner.py`)* — LOW
+## P1.1 · Admin API is fully open when no keys are configured
+**File:** `src/ruitong/auth/router.py` · **Function:** `_check_admin_key` · **Lines ~31–37**
+
+```python
+    else:
+        # Legacy: no admin_key configured — accept api_key for admin ops
+        if not hmac.compare_digest(
+            provided.encode("utf-8", "surrogateescape"),
+            config.api_key.encode("utf-8"),
+        ):
+            raise HTTPException(status_code=403, detail="Forbidden: invalid admin key")
+```
+
+`hmac.compare_digest(b"", b"") is True`. With the **default** config (`api_key=""`, `admin_key=""` — `config.py` lines ~66 and ~69), a request with **no `X-API-Key` header at all** passes this check. And `auth_middleware` (`main.py`, `has_auth = bool(config.api_key) or bool(config.admin_key)`) also lets it through, because no auth is configured.
+
+Traced end to end for `POST /v1/admin/keys` with a clean environment:
+
+1. `auth_middleware` → `has_auth` False → sets principal `"anonymous"` → `call_next`
+2. `rate_limit_middleware` → passes
+3. `payload_size_middleware` → passes
+4. `create_key` → `_check_admin_key` → `else` branch → `compare_digest("", "")` → **authorised**
+5. Returns `{"key_id":…, "plaintext_key":"rt_…"}`
+
+So an unauthenticated caller can mint API keys, enumerate every key's metadata (`GET /v1/admin/keys`), and revoke every key (`DELETE /v1/admin/keys/{id}` — a one-request denial of service against every paying customer).
+
+This also directly contradicts the documented intent. `config.py` line ~69 says:
+
+```python
+    # Admin key for API key management endpoints. Empty = admin API disabled.
+    admin_key: str = ""
+```
+
+Empty does not disable the admin API; it opens it.
+
+**Fix — fail closed:**
+
+```python
+def _check_admin_key(request: Request) -> None:
+    config = getattr(request.app.state, "config", None) or BridgeConfig.from_env()
+    if not config.admin_key:
+        raise HTTPException(503, "Admin API disabled: RUITONG_ADMIN_KEY is not set")
+    provided = request.headers.get("X-API-Key", "")
+    if not provided:
+        raise HTTPException(401, "Missing X-API-Key")
+    if not hmac.compare_digest(
+        provided.encode("latin-1"), config.admin_key.encode("utf-8")
+    ):
+        raise HTTPException(403, "Forbidden: invalid admin key")
+```
+
+Never branch on an empty secret. Add a startup assertion in `lifespan` too: if the admin router is mounted and `admin_key` is empty, log a loud warning (or refuse to mount the router).
+
+## P1.2 · Every ordinary API-key holder is a full admin in "legacy" mode
+**File:** `src/ruitong/auth/router.py` · **Function:** `_check_admin_key` · **Lines ~31–37**
+
+Same `else` branch, second failure mode. In the configuration `RUITONG_API_KEY` set / `RUITONG_ADMIN_KEY` unset — which is exactly what an existing Phase 4 deployment looks like the moment the admin router is mounted — any customer holding the data-plane key can create keys, list all keys, and revoke all keys. There is no separation of duties at all.
+
+Note the test suite believes it covers this. `tests/test_auth.py::TestAdminAPI::test_admin_rejects_non_admin_key` only runs with `RUITONG_ADMIN_KEY="admin-secret"` set (see `_get_client`), i.e. the *safe* branch. The unsafe branch has no test.
+
+**Fix:** delete the legacy branch entirely (covered by the P1.1 patch). If backward compatibility is genuinely required, gate it behind an explicit opt-in (`RUITONG_ALLOW_LEGACY_ADMIN=1`) and document that it grants admin to all data-plane keys.
+
+## P1.3 · Failed authentication is not rate limited at all → unlimited credential brute force with query amplification
+**File:** `src/ruitong/main.py` · **Functions:** `auth_middleware`, `rate_limit_middleware`
+
+The H2 fix moved auth to the outermost position (correct: Starlette's `add_middleware` inserts at index 0, so the last-registered `auth_middleware` runs first). But `auth_middleware` returns the 401 `JSONResponse` **without calling `call_next`**, so `rate_limit_middleware` never executes for a rejected request. Consequences:
+
+* An attacker can send **unlimited** `X-API-Key` guesses against `/v1/port` at whatever rate the network allows. Both the KeyStore keys and `config.admin_key` are guessable this way (the admin key is accepted as a data-plane credential — `main.py` `auth_middleware`, `request.state.api_key_principal = "admin"`).
+* Each guess costs the server a `SELECT key_id FROM api_keys WHERE key_hash = ? AND is_active = 1` — and `api_keys` has **no index on `key_hash`** (`keystore.py::_init_schema`, lines ~55–65). That is a full table scan per guess, executed while holding `self._lock`, serialising every other request in the process. Cheap request, expensive response: an amplification DoS.
+* There is no lockout, no backoff, no logging of failures (see P2.8), so the attempt is also invisible.
+
+The 192-bit key entropy makes *guessing* infeasible, so this is a DoS and detection failure rather than a key-recovery path — but it is the classic "the fix traded one availability bug for another" pattern that `LESSONS.md` warns about, and it must not ship.
+
+**Fix:**
+1. Add a failed-auth counter keyed on the trusted client identity, evaluated *inside* `auth_middleware` before touching the KeyStore, with exponential backoff (e.g. 10 failures/minute → 429, then lengthening). Keep it separate from the authenticated-principal bucket so the two cannot starve each other.
+2. `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);` in `_init_schema`.
+3. Cap `X-API-Key` length (reject > 256 chars) before hashing.
+
+## P1.4 · The SQLite-backed KeyStore is in-memory by default — every issued key is lost on restart and invisible to sibling workers
+**Files:** `src/ruitong/auth/keystore.py` (`__init__` line ~42, `default` lines ~35–39), `src/ruitong/config.py` (`key_db_path` line ~78), `src/ruitong/auth/router.py::_get_key_store`
+
+```python
+    def __init__(self, db_path: str = "") -> None:
+        path = db_path or ":memory:"
+```
+
+`config.key_db_path` defaults to `""`, and `lifespan` does `KeyStore(db_path=config.key_db_path)`. So unless the operator sets `RUITONG_KEY_DB_PATH`, the entire key store is `:memory:`:
+
+* Every key minted through `POST /v1/admin/keys` — the plaintext of which is **unrecoverable by design** — vanishes on restart or redeploy. The customer's credential is silently dead and cannot be reissued to the same identity.
+* Under `uvicorn --workers N`, each worker has its own store. A key created on worker 1 returns 401 on worker 2. This is the same defect already recorded as `SECURITY_AUDIT.md` M4 for jobs, reintroduced for credentials, where it is worse.
+* `_get_key_store` compounds it: if `app.state.key_store` is absent (lifespan didn't run) it silently falls back to `KeyStore.default()`, which is a process-wide `:memory:` singleton — and then caches it on `app.state`, so the auth middleware happily authenticates against a store that will evaporate.
+
+**Fix:**
+* Make persistence mandatory for the key store: if `key_db_path` is empty, either default to a concrete path (`./ruitong-keys.db`) or refuse to start when the admin router is mounted. `:memory:` should only be reachable from tests via an explicit sentinel.
+* Delete `KeyStore.default()` or make it raise unless a path was configured; a credential store must never be silently ephemeral.
+* For the file-backed case, set `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` in `_init_schema` (multi-worker writes to `last_used_at` will otherwise raise `database is locked`).
+
+## P1.5 · Any authenticated key can read any other customer's job report
+**Files:** `src/ruitong/jobs/persistence.py::_init_schema` (no owner column), `src/ruitong/api/router.py::get_port_job` (line ~168 area), `submit_port_job`
+
+Phase 5 finally created a per-caller identity (`request.state.api_key_principal`) — and then did not use it. `jobs` still has no owner column, `store.create(job, model=…, target=…)` records no principal, and `get_port_job` is:
+
+```python
+    job = store.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, ...)
+    return job
+```
+
+`job_id` is `uuid4().hex` so it is not enumerable, but it is a bare bearer capability in a URL *path*: it lands in Cloudflare logs, proxy logs and `Referer` headers, with no second factor. This is `SECURITY_AUDIT.md` H1, which was previously blocked on "there is no caller identity to scope by." That blocker is gone. Per `DECISIONS.md` D5 the report *is* the product; cross-tenant read of the deliverable is the most commercially serious defect in this phase.
+
+**Fix:**
+* `ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''` (or a migration to a new schema).
+* `submit_port_job` passes `owner=request.state.api_key_principal`.
+* `get_port_job` scopes: `store.get(job_id, owner=principal)` and returns 404 (not 403) on owner mismatch, so the endpoint does not confirm existence.
+* Add the same scoping to any future list endpoint.
+
+## P1.6 · `POST /v1/port` returns `passed: true` for a backend compared with itself, and for partially-errored runs
+**File:** `src/ruitong/api/router.py` · **Functions:** `_make_runner` (lines ~26–43), `run_port`, `submit_port_job`, `_report_to_response`
+
+Two safeguards that `cli.py` enforces are simply absent from the HTTP surface:
+
+1. **Self-comparison is permitted.** `_make_runner` for `target="cuda"` returns `EquivalenceRunner(cuda, cuda)`; for `"ascend"`, `EquivalenceRunner(ascend, ascend)`. `cli.py::_run_port` exits 2 for exactly this (*"comparing an endpoint with itself certifies nothing"*), and `tools/compare_corpora.py` prints `REFUSED`. The API instead emits a report with `passed: true`.
+2. **No coverage gate.** `cli.py` computes `passed = report.passed and not synthetic and not incomplete` and refuses to pass when `errored_prompts > 0`. `_report_to_response` uses `report.passed` verbatim and drops `compared_prompts` / `errored_prompts` from the response model entirely (see `api/__init__.py::PortReport`). So an API report can certify a port where 63 of 64 prompts errored — the exact false-PASS `runner.py`'s own comments say is "the worst failure mode for a tool whose output is a trust claim."
+
+The suite **asserts** both behaviours, which is why they survived:
+
+* `tests/test_api.py::TestPortEndpoint::test_port_ascend_single` — `assert data["passed"] is True`
+* `tests/test_api.py::TestPortPreviewEndpoint::test_preview_accepts_target` — `assert report["passed"] is True  # self-comparison always passes`
+
+`validation_level: "simulated"` is honest mitigation but it is a separate field a consumer can ignore; `passed` is the field that gates.
+
+**Fix:**
+* Reject `target` values that produce a self-comparison with 400, or drop `cuda`/`ascend` as targets and require two distinct backends (matching `--reference NAME=URL --candidate NAME=URL` from D8).
+* Move the coverage/synthetic gate out of `cli.py` into a shared helper (`equivalence/gate.py`) used by both surfaces, so the two can never diverge again.
+* Add `compared_prompts`, `errored_prompts` and `synthetic` to `PortReport`, and force `passed=False` whenever `errored_prompts > 0` or the run was synthetic.
+* Rewrite the two tests above to assert `passed is False` / a 400.
 
 ---
 
-## Notes
+# P2 findings
 
-**What's good and should be preserved:**
-- Clean layering: `metrics.py` is pure and side-effect free, `runner.py` orchestrates, `cli.py` only does I/O. That separation is why every finding above is a small, local fix rather than a rewrite.
-- Explicit threshold constants and a `thresholds_used` block in the artifact — right instinct for auditability (just needs to be load-bearing, #11).
-- Per-prompt results retained alongside aggregates — essential for debugging real divergence.
-- Graceful zero-vector handling in cosine, and the metric unit tests with known-angle fixtures (60°, orthogonal, opposite) are genuinely good.
-- Subprocess CLI tests catch packaging/entry-point breakage that in-process tests miss; keep one, but move assertion-heavy cases in-process (#17).
+## P2.1 · Non-ASCII admin or API keys can never authenticate
+**Files:** `src/ruitong/auth/router.py::_check_admin_key` (lines ~27, ~34), `src/ruitong/main.py::auth_middleware`
 
-**Root-cause observation.** The recurring pattern across P1s #2, #3, #8 and P2 #16 is that **`passed` defaults to `True` and is only ever downgraded.** In a verification tool the default must be "not verified". A single change — `passed: bool = False`, promoted only by an explicit `_evaluate()` that requires evidence — plus a `status` enum distinguishing `ok` / `diverged` / `incomplete` / `error`, eliminates four of the eight blockers and makes the remaining ones visible in tests.
+```python
+provided.encode("utf-8", "surrogateescape"),
+config.admin_key.encode("utf-8"),
+```
 
-**Second root cause.** The fixture's divergence model (uniform additive shift) is orthogonal to what the metrics measure, and the fixture never varies by prompt. That's why 172 passing tests coexist with a top-1 metric that ranks positions instead of tokens and a top-5 metric that can never pass. Perturbation-mode fakes (#13) with golden expected verdicts per mode is the highest-leverage test investment for Phase 5.
+Starlette decodes header bytes as **latin-1**. To recover the wire bytes you must `provided.encode("latin-1")`. Encoding a latin-1-decoded string as UTF-8 turns every byte ≥ 0x80 into two bytes, while `os.environ` gives you a UTF-8-decoded string whose `.encode("utf-8")` *is* the original bytes. The two can therefore never match for a non-ASCII secret — the admin API 403s permanently and the data plane 401s permanently, with no diagnostic. `SECURITY_AUDIT.md` M1 fixed the 500; the silent lockout replaced it.
 
-**Questions for the team:**
-1. What is `--target <single>` *meant* to do — baseline capture, golden-file regression, or smoke test? The current self-comparison suggests the semantics were never settled. This decision blocks #3.
-2. Where do 0.99 / 0.05 / 0.99 / 0.95 come from? Vendor guidance, empirical fp16-vs-bf16 measurement, or placeholder? These numbers will be quoted in customer-facing porting reports, so provenance needs to be in the docstring.
-3. Tokenizer parity is unaddressed: if CUDA and Ascend tokenize differently, positional logprob alignment is meaningless before any metric runs. Is a tokenizer-hash equality precondition in scope for Phase 5, or assumed?
-4. Is `-inf` in logprobs expected from either real backend? The answer determines whether #9 is "clamp and warn" or "reject".
-5. Does the Phase 4 exit contract require `ruitong port` to be CI-gateable? If yes, #1 is a hard blocker; if Phase 4 is explicitly "human-readable report only", say so in the CLI docstring and I'll re-grade #1 as P2.
+**Fix:** `provided.encode("latin-1")` on the header side (both call sites), and document that keys must be ASCII. Better: validate at startup that `admin_key`/`api_key` are ASCII and reject otherwise.
 
-**Re-audit scope:** P1 #1–#8 all need fixes plus tests that would fail without them (particularly a determinism test for #7 and a `passed is False` assertion for #2/#3). P2 #9, #10, #11, #16, #17 should land in the same cycle; the rest can be scheduled.
+## P2.2 · HMAC is used with no server-side pepper; the docstring overclaims
+**File:** `src/ruitong/auth/keystore.py` · **Functions:** `create_key` (line ~90), `authenticate` (line ~112)
+
+```python
+key_hash = hmac.new(plaintext.encode("utf-8"), b"", "sha256").hexdigest()
+```
+
+The plaintext is the HMAC *key* and the message is empty. There is no secret the attacker doesn't already hold, so this is cryptographically equivalent to `sha256(plaintext)` with a fixed IV — a single-round, unsalted, unpeppered digest. The class docstring (line ~28, *"Each key is stored as an HMAC-SHA256 digest"*) implies keyed hashing that isn't happening.
+
+With 192 bits from `secrets.token_hex(24)` this is not currently exploitable, and that is the only reason it isn't P1. But it removes all defence in depth: the moment anyone adds operator-supplied or shorter keys, a stolen DB is trivially crackable, and a global rainbow table over `rt_`-prefixed keys becomes viable.
+
+**Fix:** introduce `RUITONG_KEY_PEPPER` and compute `hmac.new(pepper_bytes, plaintext_bytes, "sha256")`. Store an algorithm/version tag column so keys can be rehashed. Refuse to start if the pepper is unset and any key exists. Fix the docstring either way.
+
+## P2.3 · The `prefix` column stores the constant `"rt_"`, so you cannot tell which row a leaked key is
+**File:** `src/ruitong/auth/keystore.py::create_key` (line ~100), consumed by `list_keys`
+
+```python
+(key_id, key_hash, name, "rt_", now),
+```
+
+The whole purpose of a prefix column is operational identification (`sk-live-8f2a…`). Every row is identical, so `GET /v1/admin/keys` gives an operator no way to correlate a key found in a log, a client config, or a leak with a `key_id` to revoke. Since the plaintext is unrecoverable, the only recourse is revoking everything.
+
+**Fix:** store `plaintext[:11]` (e.g. `rt_8f2a3b1`) and return it from `create_key` and `list_keys`. Consider also storing the last 4 chars.
+
+## P2.4 · `authenticate` writes and commits on every request
+**File:** `src/ruitong/auth/keystore.py::authenticate` → `update_last_used` (lines ~120, ~145)
+
+Every authenticated request performs `UPDATE api_keys SET last_used_at = ?` plus `commit()` while holding `self._lock`, on the event-loop thread. Combined with the missing index (P1.3) this makes auth the throughput ceiling of the whole service, and once `key_db_path` is set it means an fsync per request blocking the loop.
+
+**Fix:** debounce — only update when `last_used_at` is older than N minutes (`UPDATE … WHERE key_id = ? AND (last_used_at IS NULL OR last_used_at < ?)`), and/or offload to `anyio.to_thread`. Add the index from P1.3.
+
+## P2.5 · `create_key` will 500 on malformed input
+**File:** `src/ruitong/auth/router.py::create_key` (lines ~56–62)
+
+```python
+    body = await request.json()
+    name: str = body.get("name", "")
+```
+
+* Non-JSON body → `json.JSONDecodeError` → caught by `main.py::catch_all_handler` → **500**, should be 400.
+* JSON that isn't an object (`[]`, `"x"`, `3`) → `AttributeError: 'list' object has no attribute 'get'` → 500.
+* `{"name": {"a": 1}}` → truthy non-str passes the `if not name` guard → `sqlite3.InterfaceError` → 500.
+* `name` has no length bound → unbounded DB row from a single request.
+
+**Fix:** use a Pydantic body model, which also fixes the OpenAPI schema:
+
+```python
+class CreateKeyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+@router.post("/keys")
+async def create_key(req: CreateKeyRequest, request: Request) -> dict:
+```
+
+Also set `Cache-Control: no-store` on the response that carries `plaintext_key`.
+
+## P2.6 · Pricing config is parsed but never validated → 500s from an env var
+**Files:** `src/ruitong/config.py::from_env` (lines ~95–105), `src/ruitong/pricing/router.py::list_pricing`, `get_pricing`
+
+`from_env` only checks that `RUITONG_PRICING` is *valid JSON*, then annotates the result `dict[str, dict]` without checking. Reachable 500s:
+
+* `RUITONG_PRICING='[1,2]'` → `list_pricing` → `pricing.items()` → `AttributeError` → 500. `get_pricing` → `pricing[model]` → `TypeError` → 500.
+* `RUITONG_PRICING='{"Qwen":0.5}'` → `tier_data.get(...)` → `AttributeError` → 500.
+* `RUITONG_PRICING='{"Qwen":{"price_per_input_token_cny":"free"}}'` → `float("free")` → `ValueError` → 500.
+* Negative prices are accepted silently — a CNY billing surface should not permit that.
+
+**Fix:** validate at config load with a Pydantic model (`dict[str, PricingTierConfig]` with `ge=0` on both prices) and raise a clear `ValueError` naming the offending model, consistent with how `_int_from_env` already behaves. Then the routers need no defensive coercion.
+
+## P2.7 · Rate limiting collapses to one global bucket in dev mode; the IP fallback is dead code
+**File:** `src/ruitong/main.py::rate_limit_middleware` (lines ~200–212)
+
+```python
+    principal: str | None = getattr(request.state, "api_key_principal", None)
+    if principal is None:
+        principal = request.client.host if request.client else "unknown"
+```
+
+`auth_middleware` always sets `api_key_principal` — including `"anonymous"` in the no-auth branch — so `principal is None` is never true and the IP fallback is unreachable. With no auth configured (the default), *all* traffic shares one `"anonymous"` bucket: a single client sending 30 requests in a minute 429s every other client. The comment claiming *"in production with auth configured, this path is never reached"* is describing behaviour the code doesn't have.
+
+Related: for exempt paths with auth configured, the middleware also sets `api_key_principal = "anonymous"`, which will silently mislabel the principal for any future handler that reads it.
+
+**Fix:** distinguish "unauthenticated/anonymous" from "authenticated principal" explicitly — set `request.state.api_key_principal = None` in the no-auth branch and let the IP fallback run, or add `request.state.auth_mode`. Then S4 applies again: derive the client IP from `CF-Connecting-IP` **only** when the peer is in a configured trusted-proxy list.
+
+## P2.8 · No audit log for admin operations or auth failures
+**Files:** `src/ruitong/auth/router.py` (all three handlers), `src/ruitong/main.py::auth_middleware`
+
+Key creation, key revocation, and failed authentication produce no log line anywhere. For a credential-management subsystem this is a finding in its own right: after an incident there is no way to establish which keys were minted, by whom, or when the brute force started. It also makes P1.1/P1.2/P1.3 undetectable in production.
+
+**Fix:** structured log on create/revoke (`key_id`, `name`, admin principal, timestamp, client IP) and on auth failure (principal-less, IP, path, reason). Never log `plaintext_key` or the presented header value.
+
+## P2.9 · A test that cannot fail
+**File:** `tests/test_api.py::TestPayloadCap::test_large_payload_rejected` (lines ~198–216)
+
+```python
+        if resp.status_code == 413:
+            assert resp.json()["error"] == "Payload too large"
+        else:
+            assert resp.status_code == 200
+```
+
+Both branches pass, and the comments in the test body (*"exceeds 100-byte limit? No, 50 < 100"*) show the author knew the payload doesn't trigger the cap. This is exactly `LESSONS.md` L4: it would pass identically with `payload_size_middleware` deleted.
+
+**Fix:** send a body that provably exceeds `RUITONG_MAX_PAYLOAD_BYTES` and assert `413` unconditionally. Add the `Transfer-Encoding: chunked` bypass case from `SECURITY_AUDIT.md` S2 as an xfail so the open finding is tracked in code.
+
+## P2.10 · The production wiring path (`lifespan`) is never exercised, and `KeyStore.default()` leaks state across tests
+**Files:** `tests/test_api.py` (line ~11, `client = TestClient(app)`), `tests/test_auth.py`, `tests/test_pricing.py`
+
+Every test constructs `TestClient(app)` without the context-manager form, so `lifespan` never runs. Consequently `app.state.config`, `app.state.job_store`, `app.state.key_store`, `app.state.pricing_config` and `app.state.rate_limit_*` are never set, and every request takes the `getattr(..., None)` fallback path. So:
+
+* `KeyStore(db_path=config.key_db_path)` and `JobStore(db_path=…)` — the actual production constructors — have **zero** coverage. P1.4 lives entirely in untested code.
+* `_get_key_store` falls back to `KeyStore.default()`, a class-level singleton on `ruitong.auth.keystore.KeyStore`. `importlib.reload(ruitong.main)` does *not* reload `ruitong.auth.keystore`, so the same singleton — and every key in it — is shared by all tests in the session. `test_list_keys` asserting `len(keys) >= 1` rather than `== 1` is the tell.
+* Combined with module-level `client = TestClient(app)` in `test_api.py` plus `importlib.reload` elsewhere, the suite is order-dependent.
+
+**Fix:** use `with TestClient(app) as client:` (or `httpx.ASGITransport` with an explicit lifespan) so the real wiring is what's tested; add a fixture that constructs `KeyStore(db_path=str(tmp_path/"keys.db"))` and injects it via `app.dependency_overrides` / `app.state`; reset `KeyStore._default_instance` in an autouse fixture.
+
+## P2.11 · Missing tests on the exact behaviours the brief asks about
+See §T1 below. Notably: **no test asserts that `/v1/pricing` requires auth.** `tests/test_pricing.py` never sets `RUITONG_API_KEY`, so it only ever exercises the unauthenticated path. The endpoint *is* correctly non-exempt (it's absent from `AUTH_EXEMPT_PATHS` in `main.py` line ~24) and therefore does inherit middleware auth — but nothing pins that, so removing it or adding `/v1/pricing` to the exempt set would be a silent, green regression.
+
+## P2.12 · Middleware ordering comments contradict the code and each other
+**File:** `src/ruitong/main.py` (lines ~110–120, and the docstrings of `payload_size_middleware` and `rate_limit_middleware`)
+
+Actual execution order is `auth → rate_limit → payload_size → handler`. `payload_size_middleware`'s docstring says *"Number 2 in the execution order (runs after auth, before rate-limit)"* (it is number 3, after rate-limit) and `rate_limit_middleware`'s says *"Number 3 … runs after auth + payload check"* (it is number 2, before the payload check). The consequence is real if minor: an oversized body consumes rate-limit budget before being rejected.
+
+**Fix:** correct the comments, and consider registering `payload_size` last-but-one so a 413 doesn't cost the caller quota. Add a test that asserts the order (e.g. an oversized unauthenticated request returns 401, not 413).
+
+## P2.13 · Carryovers still open and now reachable from Phase 5 routes
+* `src/ruitong/main.py::lifespan` (lines ~40–41) still registers `FakeCuda()`/`FakeAscend()`; `GET /v1/models` instantiates fakes per request. The production ASGI app serves fabricated data (`QA_PHASE2.md` F1, unfixed).
+* `src/ruitong/jobs/persistence.py::count_active` is defined and called from nowhere — the job concurrency cap remains dead code; no `DELETE`, TTL or vacuum (`SECURITY_AUDIT.md` H3). `submit_port_job` is now reachable by any of N keys.
+* `src/ruitong/api/router.py::submit_port_job` — `asyncio.create_task(_run_job())` discards the reference (GC-able mid-flight), with no timeout, shutdown drain or reaper (M3).
+* `run_port` executes the CPU-bound comparison loop on the event loop (C1 remainder).
+
+---
+
+# P3 findings
+
+| # | Location | Issue / fix |
+|---|---|---|
+| 1 | `auth/keystore.py::KeyStoreError` (line ~19) | Defined, never raised. Either use it (wrap `sqlite3.Error`) or delete it. |
+| 2 | `auth/keystore.py::revoke_key` (line ~135) | Returns `True` for an already-revoked key (SQLite counts matched rows). Add `AND is_active = 1` so the endpoint can distinguish "revoked now" from "was already revoked". |
+| 3 | `auth/keystore.py` schema | No `expires_at`, no `scopes`/`permissions`. Multi-key auth without expiry or least-privilege will need a migration later; add the columns now even if unused. |
+| 4 | `auth/keystore.py::close` + `default()` | The singleton is never closed, and reusing it after `close()` raises `sqlite3.ProgrammingError`. Tests call `close()` on their own instances only. |
+| 5 | `api/router.py::_make_runner` (line ~41) | The `else: raise HTTPException(400)` branch is unreachable — `PortRequest.target` has `pattern=r"^(cuda\|ascend\|auto)$"`. Dead code. |
+| 6 | `api/router.py::_report_to_response` | Emits only the metrics D9 **retired** (`cosine_similarity`, `max_absolute_difference`) plus index-based top-1/top-5, and reports `cosine_min`/`max_abs_diff_max` as `thresholds` — none of which gate. The gating `token_matched_prob_diff`, `probability_mass_delta` and their thresholds are omitted, so a consumer cannot see why `passed` is what it is. Sync the API models to `Thresholds` and `report.metrics`. (Raise to P2 if the API is intended to ship as the deliverable.) |
+| 7 | `main.py` | `AUTH_EXEMPT_PATHS` exempts `/v1/models` and `/openapi.json` from **both** auth and the rate limiter — unauthenticated, unlimited model-inventory disclosure and a full public schema of the admin API. Consider gating `/openapi.json` and `/docs` in production. |
+| 8 | `main.py::rate_limit_middleware` | 429 lacks a `Retry-After` header (the value is only in the JSON body); 401 lacks `WWW-Authenticate`. |
+| 9 | `main.py::rate_limit_middleware` | `timestamps.pop(0)` is O(n); use `collections.deque` + `popleft`. Eviction of the "stalest" bucket resets that principal's counter — an authenticated attacker with many keys could exploit it; prefer a TTL sweep only. |
+| 10 | `main.py` | Unused import `ChatRequest`. `api/router.py`: unused `JSONResponse`, unused `request: Request` on `run_port`; `api/__init__.py::PortError` is defined and never used. |
+| 11 | `config.py` | `pricing_config: dict[str, dict]` is a mutable field on a frozen dataclass, and `lifespan` publishes the same object as `app.state.pricing_config`. Freeze it (`MappingProxyType`) or model it. |
+| 12 | `auth/router.py::_get_key_store` | Mutates `request.app.state` from inside a request handler — benign in a single-threaded loop but a surprising side effect; do the wiring in `lifespan` only. |
+| 13 | `scripts/phase_audit.py::main` | (a) `FINDINGS_FILE.write_text(full)` **overwrites** `QA_FINDINGS.md`, which is precisely the process failure `QA_PHASE2.md` opens with (*"never overwrite — the loop's memory is the point"*); write `QA_PHASE5.md` or append. (b) The header hardcodes `"Phase 4 Audit"` while auditing Phase 5. (c) The docstring advertises `--phase N`, which is never parsed — there is no `argparse`. (d) `trim_to_budget` truncates mid-file with no marker, so a trimmed audit silently reviews half a file. |
+
+---
+
+# T1 · Minimum tests to add before this can pass
+
+1. **Admin fail-closed:** with `RUITONG_ADMIN_KEY` and `RUITONG_API_KEY` both unset, `POST/GET/DELETE /v1/admin/keys` with no header **and** with an arbitrary header must not return 2xx. (Fails today — catches P1.1.)
+2. **No privilege escalation:** with `RUITONG_API_KEY` set and `RUITONG_ADMIN_KEY` unset, the api_key must not be accepted on `/v1/admin/keys`. (Fails today — catches P1.2.)
+3. **Failed auth is charged:** with `RUITONG_ADMIN_KEY` set and `rate_limit_per_minute=2`, five requests with a wrong key must not all return 401 — one must be 429. (Fails today — catches P1.3.)
+4. **Keys survive a restart:** create a key against `KeyStore(db_path=tmp)`, close, reopen, `authenticate(plaintext)` returns the same `key_id`; plus an HTTP-level test that a revoked key gets 401 from the middleware (currently only tested at the KeyStore layer). (Catches P1.4.)
+5. **Per-principal buckets:** two distinct KeyStore keys each get their own quota; exhausting one must not 429 the other. (The H2/S4 fix is currently unverified.)
+6. **Job isolation:** key A submits a job, key B polling that `job_id` gets 404. (Catches P1.5.)
+7. **Pricing requires auth:** with `RUITONG_API_KEY` set, `GET /v1/pricing` and `/v1/pricing/{model}` return 401 without a key and 200 with one. (Catches P2.11.)
+8. **Malformed inputs return 4xx not 5xx:** non-JSON body, JSON array body, and non-string `name` on `POST /v1/admin/keys`; `RUITONG_PRICING='[1,2]'` and `'{"m":{"price_per_input_token_cny":"free"}}'` on the pricing routes. (Catches P2.5, P2.6.)
+9. **Reflexivity/self-comparison refusal at the API layer:** `POST /v1/port {"target":"cuda"}` must not return `passed: true`. Replaces the two tests that currently assert the opposite. (Catches P1.6.)
+
+Also: run the suite with `-p no:randomly`-style ordering variation, or simply reverse `testpaths` order once — the shared `KeyStore.default()` singleton and module-level `TestClient(app)` make the current green result order-dependent.
+
+---
+
+# Summary table
+
+| ID | Sev | File · function | Issue |
+|---|---|---|---|
+| P1.1 | P1 | `auth/router.py::_check_admin_key` ~31–37 | `compare_digest("","")` → admin API open with no credentials |
+| P1.2 | P1 | `auth/router.py::_check_admin_key` ~31–37 | Any api_key holder becomes full admin |
+| P1.3 | P1 | `main.py::auth_middleware` / `rate_limit_middleware` | Failed auth never rate limited; unindexed table scan per guess |
+| P1.4 | P1 | `auth/keystore.py::__init__`/`default`, `config.py::key_db_path` | Key store is `:memory:` by default — keys lost on restart, per-worker |
+| P1.5 | P1 | `jobs/persistence.py` schema, `api/router.py::get_port_job` | No job ownership → cross-tenant report read |
+| P1.6 | P1 | `api/router.py::_make_runner`, `_report_to_response` | API emits `passed: true` for self-comparison and errored runs |
+| P2.1 | P2 | `auth/router.py`, `main.py` | latin-1 vs utf-8: non-ASCII keys can never match |
+| P2.2 | P2 | `auth/keystore.py::create_key`/`authenticate` | HMAC with no pepper ≡ unsalted SHA-256; docstring overclaims |
+| P2.3 | P2 | `auth/keystore.py::create_key` | `prefix` is the constant `"rt_"` → can't identify a key to revoke |
+| P2.4 | P2 | `auth/keystore.py::authenticate` | Write + commit + full scan on every request |
+| P2.5 | P2 | `auth/router.py::create_key` | Malformed body → 500; `name` unvalidated/unbounded |
+| P2.6 | P2 | `config.py::from_env`, `pricing/router.py` | Pricing config unvalidated → 500 from env var; negative prices allowed |
+| P2.7 | P2 | `main.py::rate_limit_middleware` | Single global `"anonymous"` bucket; IP fallback unreachable |
+| P2.8 | P2 | `auth/router.py`, `main.py::auth_middleware` | No audit log for key create/revoke or auth failure |
+| P2.9 | P2 | `tests/test_api.py::test_large_payload_rejected` | Test cannot fail |
+| P2.10 | P2 | all test modules | `lifespan` never runs; `KeyStore.default()` singleton leaks across tests |
+| P2.11 | P2 | `tests/test_pricing.py` et al. | Missing tests (see T1), incl. pricing auth |
+| P2.12 | P2 | `main.py` middleware docstrings | Ordering comments contradict code |
+| P2.13 | P2 | `main.py::lifespan`, `jobs/persistence.py`, `api/router.py` | Fake backends in prod app; dead job cap; orphaned tasks; blocking loop |
+| P3.1–13 | P3 | see table above | Dead code, missing headers, unused imports, `phase_audit.py` overwriting `QA_FINDINGS.md` |
+
+**Verdict: FAIL.** Re-audit at a pinned SHA (per `PLAN.md` rule 9) once P1.1–P1.6 and the §T1 tests land.
