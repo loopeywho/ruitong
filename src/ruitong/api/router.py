@@ -26,19 +26,21 @@ router = APIRouter(prefix="/v1/port", tags=["port"])
 def _make_runner(
     model: str, target: str
 ) -> tuple[EquivalenceRunner, str | None, str | None]:
-    """Build the runner and determine which backends to compare."""
+    """Build the runner and determine which backends to compare.
+
+    Only ``target="auto"`` is accepted. Single-target comparisons (cuda/ascend)
+    were removed in R3 — they compared a backend against itself and returned a
+    false ``passed: True``, which is worse than refusing to run.
+    """
     if target == "auto":
         cuda = FakeCuda(model_ids=[model])
         ascend = FakeAscend(model_ids=[model])
         return EquivalenceRunner(cuda, ascend), "cuda", "ascend"
-    elif target == "cuda":
-        cuda = FakeCuda(model_ids=[model])
-        return EquivalenceRunner(cuda, cuda), "cuda", "cuda"
-    elif target == "ascend":
-        ascend = FakeAscend(model_ids=[model])
-        return EquivalenceRunner(ascend, ascend), "ascend", "ascend"
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown target: {target}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"target='{target}' is not allowed. Only 'auto' (cross-backend comparison) is supported. Single-target self-comparison was removed (R3).",
+        )
 
 
 def _default_prompts(model: str) -> list[str]:

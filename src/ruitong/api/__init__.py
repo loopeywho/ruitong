@@ -19,8 +19,8 @@ class PortRequest(BaseModel):
     )
     target: str = Field(
         default="auto",
-        pattern=r"^(cuda|ascend|auto)$",
-        description="Backend target: cuda, ascend, or auto",
+        pattern=r"^auto$",
+        description="Backend target (currently only 'auto' is accepted — single-target self-comparison was removed in R3)",
     )
     # Both bounds matter. `min_length` alone bounds the list from below only:
     # the comparison loop is CPU-bound and never awaits, so an unbounded list

@@ -27,25 +27,14 @@ class TestPortEndpoint:
         assert len(data["per_prompt"]) == 3
 
     def test_port_cuda_single(self) -> None:
-        """Single-target CUDA compares CUDA vs itself (tautology)."""
+        """Single-target 'cuda' is rejected with 422 (false-pass prevention, R3)."""
         resp = client.post("/v1/port", json={"model": "Qwen3-8B", "target": "cuda"})
-        assert resp.status_code == 200
-        data = resp.json()
-        # Self-comparison: all metrics should be 1.0 / 0.0
-        for m in data["metrics"]:
-            name = m["name"]
-            val = m["value"]
-            if name == "max_absolute_difference":
-                assert val == 0.0, f"{name}={val}"
-            elif val is not None:
-                assert val == 1.0, f"{name}={val}"
+        assert resp.status_code == 422, resp.text
 
     def test_port_ascend_single(self) -> None:
-        """Single-target Ascend compares Ascend vs itself (tautology)."""
+        """Single-target 'ascend' is rejected with 422 (false-pass prevention, R3)."""
         resp = client.post("/v1/port", json={"model": "Qwen3-8B", "target": "ascend"})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["passed"] is True
+        assert resp.status_code == 422, resp.text
 
     def test_port_custom_prompts(self) -> None:
         """Custom prompts are respected."""
@@ -133,25 +122,12 @@ class TestPortPreviewEndpoint:
         assert resp.status_code == 404
 
     def test_preview_accepts_target(self) -> None:
-        """Preview job accepts target parameter."""
+        """Preview job rejects single-target with 422 (R3)."""
         resp = client.post(
             "/v1/port/preview",
             json={"model": "Qwen3-8B", "target": "cuda"},
         )
-        assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
-
-        for _ in range(20):
-            poll = client.get(f"/v1/port/preview/{job_id}")
-            status = poll.json()["status"]
-            if status == "done":
-                break
-            time.sleep(0.1)
-        else:
-            pytest.fail("Job did not complete")
-
-        report = poll.json()["result"]["report"]
-        assert report["passed"] is True  # self-comparison always passes
+        assert resp.status_code == 422, resp.text
 
 
 class TestCrossTenantIsolation:
