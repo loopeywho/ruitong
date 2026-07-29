@@ -274,3 +274,59 @@ Append to `QA_FINDINGS.md` (never overwrite — it was clobbered once, losing a
 whole audit). Per task: what changed, the SHA, the real `pytest`/`mypy` output,
 and anything you could not verify. **"I could not confirm X" is a valid and
 valuable report.** A confident wrong answer costs more than an honest gap.
+
+---
+
+## R7 — Wire `/v1/port` to the registry (the remaining half of P2.13) 🔴
+
+**Boss dispatched 2026-07-29, ahead of R4.** R4 (keystore `hash_scheme`) is
+deferred: nothing is deployed, so it would migrate zero rows.
+
+**Do not redo these — already done in `667a808`:** the job concurrency cap is
+wired (`router.py:160`), and orphaned background tasks are tracked and drained
+on shutdown. `main.py::lifespan` already registers a real `VllmHttpBackend`
+when `config.cuda_base_url` / `ascend_base_url` are set, falling back to fakes
+otherwise. **That part is correct — leave it alone.**
+
+### The actual gap
+
+`_make_runner` (`src/ruitong/api/router.py:27`) **ignores the registry
+entirely** and hardcodes `FakeCuda()` / `FakeAscend()` on every call. So the
+config plumbing exists and is simply never used: the whole `/v1/port` surface
+returns reports built from fixtures, no matter how the server is configured.
+The CLI is currently the only path that can reach real hardware.
+
+### Scope
+
+1. **`_make_runner` pulls from the registry** (`request.app.state.router` /
+   `BackendRegistry`) instead of constructing fakes. It needs access to the
+   request, so its signature changes.
+2. **`GET /v1/models`** (`main.py:107`) does the same — it currently
+   instantiates `FakeCuda`/`FakeAscend` per request unconditionally.
+3. **`validation_level` must tell the truth.** It is currently hardcoded to
+   `"simulated"` at both call sites. It must be derived from what actually ran:
+   `"simulated"` when either side is a fake, something else when both are real.
+   **This is the most important item in R7** — a report that says `simulated`
+   while using real hardware is merely unhelpful, but one that omits the label
+   while using fakes is a false trust claim, which is the worst defect this
+   product can ship (D5).
+
+### Acceptance
+
+- With no endpoints configured: `/v1/port` still works, still returns
+  `validation_level="simulated"`, and `TestPortEndpoint` passes unchanged.
+- With both endpoints configured (point them at a stub HTTP server, not real
+  hardware — no spend): the report's `validation_level` is **not**
+  `"simulated"`, and the fakes are never constructed. Assert the second part by
+  patching `FakeCuda.__init__` to raise, or by asserting on the backend names
+  in the report.
+- A test asserting `_make_runner` returns registry-held instances, not fresh
+  fakes.
+
+### Explicitly OUT of scope
+
+- The C1 remainder (CPU-bound comparison on the event loop). Real, still open,
+  but it is a performance concern with no correctness or trust consequence —
+  and mixing it into this change would make the diff hard to audit.
+- Renting hardware. Use a stub HTTP server; `tools/mock_vllm.py` already exists
+  for exactly this.
