@@ -277,20 +277,29 @@ class TestEquivalenceRunner:
         # (that's the point — it should catch differences)
 
     @pytest.mark.asyncio
-    async def test_same_backend_identical(self) -> None:
-        """Same backend vs itself → perfect match."""
+    async def test_same_backend_instance_is_refused(self) -> None:
+        """Self-comparison must be REFUSED, not certified (R3).
+
+        This test previously asserted the opposite — "same backend vs itself →
+        perfect match", passed is True — which is precisely the false pass R3
+        exists to prevent. A backend compared with itself always agrees and
+        certifies nothing, so a perfect score there is a bug, not a feature.
+        The CLI has refused this since D8 (exit 2); the runner now refuses it
+        at construction.
+        """
         cuda = FakeCuda(model_ids=["qwen3-8b"])
-        runner = EquivalenceRunner(cuda, cuda)
-        report = await runner.run("qwen3-8b", ["Hello"])
-        assert report.mode == "logprob"
-        assert report.passed is True
-        assert report.metrics["cosine_similarity"] == pytest.approx(1.0)
+        with pytest.raises(ValueError, match="self-comparison"):
+            EquivalenceRunner(cuda, cuda)
 
     @pytest.mark.asyncio
     async def test_model_not_found(self) -> None:
         """Model not on backend → error in report, not crash."""
-        cuda = FakeCuda(model_ids=["other-model"])
-        runner = EquivalenceRunner(cuda, cuda)
+        # Two distinct instances: this test is about error handling, not
+        # self-comparison, which the runner now refuses outright (R3).
+        runner = EquivalenceRunner(
+            FakeCuda(model_ids=["other-model"]),
+            FakeCuda(model_ids=["other-model"]),
+        )
         report = await runner.run("qwen3-8b", ["Hello"])
         assert report.total_prompts == 1
         # Should have a warning about the failure
@@ -299,8 +308,9 @@ class TestEquivalenceRunner:
     @pytest.mark.asyncio
     async def test_report_serialization(self) -> None:
         """EquivalenceReport.to_dict() produces valid JSON."""
-        cuda = FakeCuda(model_ids=["qwen3-8b"])
-        runner = EquivalenceRunner(cuda, cuda)
+        runner = EquivalenceRunner(
+            FakeCuda(model_ids=["qwen3-8b"]), FakeCuda(model_ids=["qwen3-8b"])
+        )
         report = await runner.run("qwen3-8b", ["Test"])
         d = report.to_dict()
         json_str = json.dumps(d)
@@ -348,8 +358,9 @@ class TestEquivalenceRunner:
     async def test_per_prompt_results(self) -> None:
         """Each prompt should have its own result entry."""
         prompts = ["P1", "P2", "P3"]
-        cuda = FakeCuda(model_ids=["qwen3-8b"])
-        runner = EquivalenceRunner(cuda, cuda)
+        runner = EquivalenceRunner(
+            FakeCuda(model_ids=["qwen3-8b"]), FakeCuda(model_ids=["qwen3-8b"])
+        )
         report = await runner.run("qwen3-8b", prompts)
         assert len(report.per_prompt_results) == 3
         for i, r in enumerate(report.per_prompt_results):
