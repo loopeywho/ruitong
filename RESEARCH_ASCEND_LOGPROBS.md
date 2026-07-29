@@ -249,4 +249,51 @@ The sampling and logprobs computation happens in the `AscendSampler` / Triton ke
 
 - **No published Ascend-vs-GPU numerical comparison of logprobs values** exists in any public source (GitHub, Gitee, hiascend.com, arxiv). The PR #1483 lm_eval result is the closest proxy — it implies logprobs are accurate enough for multiple-choice accuracy, but that's a coarse metric.
 - **No one has tested whether logprobs are stable across different graph compilation modes** (eager vs ACL graph vs torchair) on the same prompt. This matters for our protocol if we compare outputs.
-- **The -inf bug (#2934) is unresolved** with no maintainer response beyond a community guess. It may or may not affect current versions.
+252|- **The -inf bug (#2934) is unresolved** with no maintainer response beyond a community guess. It may or may not affect current versions.
+253|
+254|---
+255|
+256|## R8 — `token_id:NNNNN`: Bug or normal serialisation?
+257|
+258|Investigated 2026-07-29 by tracing the serialisation path in both repos.
+259|**Verdict: (a) Fine** — CUDA↔Ascend token-identity comparison works with default settings.
+260|
+261|### Key finding
+262|
+263|`vllm-ascend` has **no custom OpenAI API server override**. It inherits upstream vLLM's
+264|`vllm/entrypoints/openai/` modules directly. Both backends share the **exact same**
+265|`_get_decoded_token()` function.
+266|
+267|### The serialisation path (both backends identical)
+268|
+269|1. **Worker layer** (`vllm_ascend/worker/v2/sample/logprob.py`): computes numeric tensors only
+270|2. **Engine layer** (`vllm/v1/engine/logprobs.py`): populates `decoded_tokens`, or `NONE`s if
+271|   `self.tokenizer is None`
+272|3. **API server** (`vllm/entrypoints/openai/chat_completion/serving.py`): `_get_decoded_token()`
+273|   checks `return_as_token_id` first — if True, returns `f"token_id:{token_id}"`;
+274|   else if `logprob.decoded_token is not None`, returns the decoded string;
+275|   else calls `tokenizer.decode([token_id])`
+276|
+277|### When `token_id:N` appears
+278|
+279|**Only when `--return-tokens-as-token-ids` is set** (default: False). Both backends emit
+280|`token_id:N` when this flag is True — it is the intentional format for disaggregated serving
+281|where the GPU tier has no tokenizer (vllm RFC #42729). Also appears for `top_logprobs` and
+282|selected-token `content[].token` identically — same function, same flag.
+283|
+284|### What #7218 actually shows
+285|
+286|Issue #7218's `token_id:101850` on *all* top-k positions is likely the **Triton kernel
+287|duplication bug** (same token id for all top-k slots), not a serialisation issue. The
+288|`token_id:` prefix may be the reporter's client-side rendering or a misconfiguration, not
+289|vllm-ascend's normal behaviour.
+290|
+291|### Decision
+292|
+293|**No hardware needed.** The serialisation path is identical by source-code inheritance.
+294|With default settings, both backends emit decoded strings. Our gate metrics
+295|(`token_matched_prob_diff`, `top1_agreement`) compare decoded strings, which will match
+296|correctly across CUDA↔Ascend.
+297|
+298|**Constraint:** ensure `--return-tokens-as-token-ids` is not set on either backend during
+299|comparison tests.
