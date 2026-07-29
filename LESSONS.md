@@ -466,3 +466,22 @@ captured corpus, detectability spans ~10⁴×: 0.500 at rank 1 on the worst prom
 in an *audit* rather than in code. **Before correcting someone else, measure your
 correction against real captured data** — a hand-made example proves only that the
 example behaves that way. And write the assertion that could embarrass you.
+
+## [2026-07-29] claude — Wrote two vacuous regression tests in a row, caught only by mutation
+**What:** audited Kimi's R7, found two real defects, wrote regression tests for both,
+and they passed. Then mutation-tested and **both mutations passed** — neither test
+could fail. One hardcoded the expected value set (`producible = {"simulated",
+"production"}`) and compared it to the schema, so it tested my own assumption rather
+than the code; reverting the fix did not touch it. The other exercised `/v1/models`
+through a normal `TestClient`, which runs `lifespan`, so the missing-state guard it
+was written to protect was never reached.
+**Why wrong:** both tests asserted against a *restatement* of the fix instead of
+against the code path the fix changed. That reads as a test and is documentation.
+**Rule:** **mutation-test every regression test, including your own — especially the
+one you just wrote to prove your own fix.** The first version always looks right.
+Concretely: a regression test must (a) call the real function rather than re-declare
+its expected output, and (b) reproduce the *condition* that triggered the bug — here,
+an app built WITHOUT lifespan, which a normal TestClient hides.
+**Sharpest part:** I had spent the entire loop telling Kimi "a test that cannot fail is
+documentation, not a test," and then wrote two in a row. Preaching a rule is not the
+same as running it against your own work.
