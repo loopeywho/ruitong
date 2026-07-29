@@ -1,106 +1,78 @@
-# R2 Audit — Opus 5
-*Audited: 2026-07-28 21:50 | SHA: 0592fc5 | Model: anthropic/claude-opus-5*
-*Input: 7646 | Output: 6489*
+# R2 Audit — Opus 5 (Fix Round)
+*Audited: 2026-07-28 22:07 | R1 SHA: 0592fc5 → R2 SHA: ce1a10b5d9db37e664189b14275c42df51cbbcee | Model: anthropic/claude-opus-5*
+*Input: 9495 | Output: 7575*
 
-# Audit — Ruitong Bridge R2 (cross-tenant isolation)
+# Ruitong Bridge R2 — Fix Round Audit (`ce1a10b5`)
 
-## Verdict: **CONDITIONAL** (blocked on 2× P1)
+## VERDICT: **CONDITIONAL**
 
-The endpoint shapes are correct and the tests prove the *happy-path* isolation claim between two authenticated keys. But the actual enforcement lives entirely in `JobStore.list_by_owner` / `.delete(owner=)` / `.get(owner=)`, which is **not in this diff and not exercised for fail-closed behaviour**. Meanwhile `_principal()` is documented to return `""` in a supported operating mode, and nothing in the new code refuses to proceed on an empty owner. Those two facts together mean the diff's docstring claims ("cross-tenant list is impossible by design", "cross-tenant delete is impossible") are **not established by the evidence presented**.
+Both P1 cross-tenant defects are genuinely fixed, at two layers, with tests that exercise the store layer. What blocks a clean RESOLVED is that **the fix is only tested where it is easiest to test** (store unit layer) and the P2 items from R2 are almost entirely untouched — including one (`JobStore.default()` fallback) that is a silent store-divergence path and one (delete/worker race) that the diff does not address at all.
 
 ---
 
-## Criterion-by-criterion
+## Audit criteria
 
-| # | Criterion | Result | Basis |
+**1. Does LIST scope by owner? — YES.**
+`list_port_jobs` → `_require_owner(request)` → `store.list_by_owner(owner)` → `SELECT * FROM jobs WHERE owner = ?`. Missing owner never reaches the store: 403 at the route, and `ValueError("owner is required")` at the store if it somehow did. Fail-closed is stronger than the criterion asked for (403 rather than empty list) and leaks nothing.
+
+**2. Does DELETE scope by owner? — YES.**
+`delete_port_job` → `_require_owner` → `DELETE FROM jobs WHERE job_id = ? AND owner = ?`; `deleted == False` → 404. Cross-tenant delete is a no-op reported as 404. Missing owner → 403 before the store. Correct.
+
+**3. Does GET return 404 (not 403) cross-tenant? — YES.**
+`store.get(job_id, owner)` is owner-scoped, returns `None`, route raises `404 Job {job_id} not found`. Existence is not confirmed. The 403 case is orthogonal (it says "enable authentication", not "that job is someone else's"), so it does not leak existence either.
+
+**4. Edge cases covered? — PARTIALLY. This is the main gap.**
+`test_persistence.py` covers empty/None owner on get/list/delete, and cross-tenant get/list/delete. Nothing in the evidence shows the following, all of which are the cases a regression would actually reappear in:
+- HTTP-level: tenant A submits → tenant B `GET` = 404, `DELETE` = 404, `LIST` = `[]` (route wiring is what P1-1 was about; it is currently asserted nowhere).
+- Fresh key → `GET /v1/port/preview` returns `200 []`.
+- Delete a non-existent job you own → 404; double-delete → second call 404.
+- Dev mode (no `RUITONG_API_KEY`) → 403 on all four routes.
+- Assertion that the persisted `owner` column is **not** the raw key (the F4 claim is unasserted).
+
+269 passing tests do not evidence any of these; the only test change visible in the diff is adding a key header to the preview tests.
+
+**5. Any path where missing/empty owner grants access? — None found in the reviewed code.** Two residual soft spots, neither an access grant:
+- `create(..., owner: str = "")` is **not** validated. Empty-owner rows can still be written (any direct caller, or a future route that forgets `_require_owner`). They are unreachable via get/list/delete, so they are orphans, not a leak — but the fail-closed rule is applied asymmetrically.
+- Not verifiable from the material provided: whether any *other* JobStore consumer exists (worker status/result updates, admin routes in `auth/router.py`) that reads or writes by `job_id` alone. Router file is truncated below `_report_to_response`. **Must be confirmed by grep before sign-off** — `grep -rn "job_store\|JobStore\|_principal(" src/` should show `_principal` called only from `_require_owner`, and no unscoped read helper reachable from a route.
+
+---
+
+## Previous findings
+
+| # | Finding | Status | Evidence |
 |---|---|---|---|
-| 1 | LIST scopes by owner | **Unproven** | Scopes by *argument*. `store.list_by_owner("")` behaviour unknown; no test with an empty/missing principal. |
-| 2 | DELETE scopes by owner | **Unproven** | Same. `store.delete(id, owner="")` behaviour unknown. |
-| 3 | GET 404 not 403 | **Pass (for the shown path)** | `get_port_job` raises 404 uniformly for "absent" and "not yours"; no 403 branch, no distinguishing detail string. Delete follows the same pattern. Still inherits the empty-owner caveat. |
-| 4 | Edge cases | **Fail** | Empty-list, delete-your-own-nonexistent, double-delete, fresh-key-sees-nothing, no-header, dev-mode: all missing. |
-| 5 | Any path where missing/empty owner allows access | **Yes — see F1** | `_principal` returns `""` by design; no guard; store semantics unverified. |
+| P1-1 | LIST/DELETE use `_require_owner` not `_principal` | **RESOLVED** | All four routes (submit/get/list/delete) now call `_require_owner`. `_principal` has no remaining direct call site in the shown code. Caveat: assert via grep on the truncated file. |
+| P1-2 | Store-level fail-closed on empty owner | **RESOLVED** | `get`/`list_by_owner`/`delete` each raise `ValueError("owner is required")`; unit-tested for empty and `None`. Incomplete only in that `create` is unguarded. |
+| P1-3 | Dev-mode auth-off collapse | **RESOLVED (security), with functional cost** | Dev mode leaves `api_key_principal` unset → `""` → 403. All async job endpoints are now unusable without auth; the diff had to rewrite the preview tests to inject a key. That is the correct trade, but it is a behaviour change that must be in release notes, not just a docstring. |
+| P2-1 | `JobStore.default()` fallback | **NOT RESOLVED** | Unchanged in all four routes: `store = getattr(app.state, "job_store", None) or JobStore.default()`. Owner scoping applies to both stores so this is not a leak, but it silently binds requests to a process-global in-memory singleton when lifespan did not run — jobs written to one store and read from the other produce phantom 404s and make isolation testing unreliable. Should raise 500 instead of inventing a store. |
+| P2-2 | Auth-required tests for new routes | **NOT RESOLVED** | No test asserts 401/403 for the job routes, nor 404 for cross-tenant access at HTTP level. The store tests do not cover route wiring — which is precisely what P1-1 was. |
+| P2-3 | Delete/worker race | **NOT RESOLVED** | Nothing in the diff touches the background task or the update path. Unverified risk: if the worker's completion write is an upsert rather than a scoped `UPDATE`, deleting a running job resurrects the row with `owner=''` — unreachable (so not a leak) but unbounded orphan growth. Needs the `update_status`/`set_result` implementation shown, and a test: submit → delete → let worker finish → assert row count is 0. |
+| P3-1 | Edge-case tests | **PARTIALLY RESOLVED** | Store-level isolation and fail-closed are covered. The list in criterion 4 above is not. |
 
 ---
 
-## Findings
+## New findings this round
 
-### F1 — P1 — Empty principal is passed straight through to the store; no fail-closed guard
-`_principal()` returns `""` when auth is disabled ("dev mode — jobs are not scoped to a tenant"), and returns `""` via `getattr(..., "")` if the middleware never ran for a route (ordering change, mounted sub-app, exception path). All three new/changed handlers then call the store with `owner=""` and take no defensive action.
+**N1 (P2) — F4 fix is forward-only; existing raw keys are still on disk.** Principals are now `sha256(key)[:16]`, but nothing migrates or scrubs `jobs.owner` rows that already contain raw API keys from before this commit. On any file-backed DB, the secret the fix was meant to stop persisting is still persisted. Needs a one-time `UPDATE jobs SET owner = ''` (or hash-forward) migration; note this also silently orphans every pre-existing job, which should be an explicit decision rather than a side effect.
 
-If `JobStore` uses the extremely common pattern `if owner: rows = [r for r in rows if r.owner == owner]`, then `owner=""` means **no filter**:
-- `GET /v1/port/preview` → dumps every job in the process, for every tenant, in one unauthenticated request.
-- `DELETE /v1/port/preview/{id}` → 204 on any tenant's job.
+**N2 (P3) — 64-bit truncated principal.** `[:16]` hex = 64 bits. Not exploitable against a specific tenant (2^64 offline preimage work), and collisions between two live keys are negligible at realistic key counts. Flagging only because the truncation buys nothing — store the full digest.
 
-Note the severity asymmetry the new LIST endpoint introduces: previously an attacker needed a 32-hex job ID to attempt cross-tenant read. LIST turns that into a single-request full-inventory disclosure *and* hands the attacker the IDs needed to drive DELETE. Even if the store happens to be fail-closed today, nothing in R2 pins that behaviour.
+**N3 (P3) — key rotation orphans jobs.** Principal is derived from the key material, so rotating a key makes that tenant's job history invisible. Acceptable for preview jobs; document it.
 
-**Required fix** (belt and braces — both layers):
-```python
-def _require_owner(request: Request) -> str:
-    owner = _principal(request)
-    if not owner:                       # dev mode, or middleware bypassed
-        raise HTTPException(status_code=403, detail="Tenant scoping unavailable")
-    return owner
-```
-and in `JobStore`: `if not owner: raise ValueError("owner is required")` at the top of `get`, `delete`, `list_by_owner`. A tenant-scoped API must not have a mode where scoping silently disappears; if dev mode needs unscoped access, give it an explicit synthetic owner (`"__dev__"`) rather than a falsy sentinel.
+**N4 (P3) — stale docstrings now actively misleading.** `_principal` still claims it returns "the real key when configured, 'anonymous' when not" — neither is true after this commit. `JobStore.get`'s docstring still says "An empty owner now matches only rows literally owned by `''`", which the new `raise ValueError` contradicts. These are the comments a future reader will trust when deciding whether `_principal` is safe to call directly.
 
-### F2 — P1 — Security-critical code path is outside the diff and untested at the unit level
-The entire isolation guarantee is `JobStore.list_by_owner` / `.delete(owner=)` / `.get(owner=)`. There are no store-level tests in this diff. 263 green tests say nothing about `list_by_owner("")`, `delete(id, owner=None)`, `delete(id, owner="' OR 1=1")`, or whether `list_by_owner` filters in SQL vs. in Python after a full table read. **Blocker: publish `persistence.py` plus direct store tests before this ships.** Minimum store tests:
+**N5 (P3) — test hygiene in the rewritten preview tests.** `monkeypatch.setenv` + `importlib.reload(ruitong.main)` inside a test body mutates module state for the rest of the session and diverges from the module-level `from ruitong.main import app` used by the `client` fixture. Prefer an app-factory fixture; this pattern makes any future isolation test order-dependent.
 
-```python
-def test_list_by_owner_rejects_empty(store): 
-    with pytest.raises(ValueError): store.list_by_owner("")
-def test_delete_rejects_empty(store):
-    with pytest.raises(ValueError): store.delete(jid, owner="")
-def test_delete_rejects_none(store): ...
-def test_get_rejects_empty(store): ...
-def test_owner_matched_exactly(store):  # no prefix/LIKE/case-fold matching
-    store.put(job, owner="tenantA"); assert store.list_by_owner("tenanta") == []
-```
-
-### F3 — P2 — Divergent store resolution: `JobStore.default()` fallback
-All three read/delete handlers do `store = JobStore.default()` when `app.state.job_store` is missing, while `submit_port_job` skips its concurrency check on that branch (`if store is not None`). Two problems: (a) if `default()` constructs a *fresh* store, LIST silently returns `[]` and DELETE silently 404s — an availability bug that masquerades as correct isolation and will be misread as "isolation works"; (b) if `default()` is a process-wide singleton, you now have two possible stores and no guarantee reads hit the store writes went to. Resolve the store once in a dependency and fail loudly (500) if unconfigured — never silently substitute a different backing store on a security-relevant read.
-
-### F4 — P2 — Owner identity appears to be the plaintext API key
-The `_principal` docstring says it returns "the real key when configured". If so, the plaintext key is the partition key persisted in the job store and joined into every job row.
-- Confirm `JobInfo` has **no** `owner`/`principal` field, or `GET /v1/port/preview` now returns the caller's plaintext key in a response body (and into any response log/cache).
-- Keys in `WHERE owner = ?` land in query logs and slow-query logs.
-- Key rotation orphans every job.
-Use a stable non-secret `key_id` (the hash/row-id you already store in the key DB) as the owner. Add an explicit test: `assert "owner" not in a_list.json()[0]` and that no response body contains `key_a`.
-
-### F5 — P2 — DELETE does not cancel the in-flight job; deleted jobs can resurrect
-`submit_port_job` spawns background work that writes results back to the store. `delete_port_job` removes the row but does not signal that task. A delete during `pending`/`running` is likely followed by the worker re-inserting the row (upsert) or crashing on a missing row. The new test only deletes a job that has almost certainly finished under the fake backends, so the race is untested. Add: submit → delete immediately → poll for ~1s asserting 404 the entire time. Also confirm the deleted-while-running job releases its `count_active()` slot exactly once (double-decrement lets a tenant exceed `max_concurrent_jobs`).
-
-### F6 — P2 — Missing fail-closed and edge-case tests (criterion 4)
-None of these exist; each maps directly to a way F1/F3 could ship undetected:
-1. Fresh key with zero jobs → `200` and `[]` (not other tenants' jobs, not 404).
-2. `DELETE` a well-formed but nonexistent ID that "you own" → 404.
-3. Double delete → 204 then 404.
-4. `GET`/`DELETE`/`LIST` with **no** `X-API-Key` while auth is configured → 401, and body contains no job data.
-5. `GET`/`DELETE`/`LIST` with a *revoked* key → 401.
-6. Delete then list → job absent from own list.
-7. Cross-tenant GET returns exactly `404` and a detail string **identical** to the nonexistent-ID case (the current 404 detail is `f"Job {job_id} not found"` in both branches — good; lock it with an assertion so nobody "helpfully" adds `"owned by another tenant"` later).
-8. Auth-disabled mode: assert the documented behaviour explicitly, whatever you choose it to be. Right now the one operating mode with zero isolation has zero tests.
-
-### F7 — P3 — Unbounded LIST
-`response_model=list[JobInfo]` with no limit/cursor, and `JobInfo` embeds the full `result.report` (per-prompt metrics). A tenant with a few thousand jobs makes this a self-inflicted DoS and a large log/response payload. Add pagination and consider a slim summary model for list.
-
-### F8 — P3 — `204` handler with `-> None`
-Returning `None` from a `status_code=204` route emits a `null` body plus `content-length: 4` on older FastAPI versions, which is protocol-invalid and breaks strict clients. Pin the behaviour: `assert b_delete.content == b""` in the test, or return `Response(status_code=204)`.
-
-### F9 — P3 — No audit logging on DELETE
-A destructive, tenant-scoped endpoint with no log line for either success or the cross-tenant 404. Cross-tenant 404s on DELETE are the highest-signal intrusion indicator this service can produce — log `{key_id, job_id, outcome}` and alert on bursts.
-
-### F10 — P3 — Test-suite hygiene
-`importlib.reload(ruitong.main)` inside test bodies rebuilds the app while the module-level `from ruitong.main import app` and the `client` fixture still reference the pre-reload object. This makes isolation results order-dependent and will eventually produce a green run against a stale app. Move the reload into a fixture that yields the freshly-built app, or use a dedicated app factory. Also: both new tests only ever assert on data they created — none asserts the *absence* of a third tenant's jobs seeded by a different test.
+**N6 (trivial)** — `router.py` has no trailing newline.
 
 ---
 
-## Gate for PASS
+## Required before sign-off
 
-1. F1: `_require_owner` in the router **and** `if not owner: raise` in all three store methods.
-2. F2: `persistence.py` posted; store-level fail-closed tests green.
-3. F4: confirm no plaintext key in `JobInfo`/response bodies.
-4. F6: items 1–8 added and green.
-5. F3 and F5 either fixed or filed with an explicit owner and follow-up ticket.
+1. **HTTP-level isolation tests** with two distinct keys: cross-tenant GET/DELETE = 404, LIST excludes, fresh key = `200 []`, dev mode = 403 on all four routes, own-nonexistent delete = 404. (Closes P2-2 and P3-1; this is the blocker.)
+2. **Grep confirmation** that no other route or helper touches `JobStore` unscoped, and that `_principal` is called only by `_require_owner`.
+3. **Show the worker update path** and add the submit→delete→worker-completes test (P2-3).
+4. `JobStore.default()` fallback → raise instead (P2-1); add `if not owner: raise` to `create` for symmetry.
+5. Migration/scrub for raw-key `owner` rows (N1) + fix the three stale docstrings (N4).
 
-Until then the correct reading of this diff is: *isolation holds between two authenticated keys against an unreviewed store; behaviour with a missing owner is unknown and the code is written to keep going rather than stop.* The docstrings' "impossible by design" should be softened to describe what is actually enforced.
+Items 1–3 are the ones I would hold the merge on; 4–5 can ship as a follow-up in the same release.

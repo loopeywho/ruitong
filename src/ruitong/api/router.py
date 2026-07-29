@@ -9,8 +9,10 @@ from fastapi.responses import JSONResponse
 
 from ..backends.fake import FakeAscend, FakeCuda
 from ..config import BridgeConfig
+from ..errors import BackendUnavailable
 from ..equivalence.runner import EquivalenceRunner, EquivalenceReport
 from ..jobs.persistence import JobStore
+from ..registry import BackendRegistry
 from . import (
     JobInfo,
     JobResult,
@@ -25,18 +27,31 @@ router = APIRouter(prefix="/v1/port", tags=["port"])
 
 
 def _make_runner(
-    model: str, target: str
-) -> tuple[EquivalenceRunner, str | None, str | None]:
-    """Build the runner and determine which backends to compare.
+    registry: BackendRegistry, model: str, target: str
+) -> tuple[EquivalenceRunner, str, str | None, str | None]:
+    """Build the runner from the registry and determine validation_level.
 
     Only ``target="auto"`` is accepted. Single-target comparisons (cuda/ascend)
     were removed in R3 — they compared a backend against itself and returned a
     false ``passed: True``, which is worse than refusing to run.
+
+    Returns ``(runner, validation_level, backend_a_name, backend_b_name)``.
+    ``validation_level`` is ``"simulated"`` when either backend is a fake,
+    ``"live"`` when both are real (R7 — truth-telling label, D5).
     """
     if target == "auto":
-        cuda = FakeCuda(model_ids=[model])
-        ascend = FakeAscend(model_ids=[model])
-        return EquivalenceRunner(cuda, ascend), "cuda", "ascend"
+        try:
+            cuda = registry.get("cuda")
+            ascend = registry.get("ascend")
+        except BackendUnavailable as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Backend not registered: {exc.message}",
+            )
+        cuda_is_fake = isinstance(cuda, (FakeCuda, FakeAscend))
+        ascend_is_fake = isinstance(ascend, (FakeCuda, FakeAscend))
+        validation_level = "simulated" if (cuda_is_fake or ascend_is_fake) else "live"
+        return EquivalenceRunner(cuda, ascend), validation_level, "cuda", "ascend"
     else:
         raise HTTPException(
             status_code=422,
@@ -136,10 +151,11 @@ async def run_port(req: PortRequest, request: Request) -> PortReport:
 
     Deprecated: prefer POST /v1/port/preview (async with job polling).
     """
-    runner, _, _ = _make_runner(req.model, req.target)
+    registry: BackendRegistry = request.app.state.router.registry
+    runner, validation_level, _, _ = _make_runner(registry, req.model, req.target)
     prompts = req.prompts if req.prompts is not None else _default_prompts(req.model)
     report: EquivalenceReport = await runner.run(req.model, prompts)
-    return _report_to_response(report, validation_level="simulated")
+    return _report_to_response(report, validation_level=validation_level)
 
 
 # ── Async job endpoints ─────────────────────────────────────────────
@@ -183,11 +199,14 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
     # Launch background task
     import asyncio
 
+    # Capture registry reference for the background task (R7)
+    registry: BackendRegistry = request.app.state.router.registry
+
     async def _run_job() -> None:
         try:
             store.update_status(job_id, JobStatus.running)
 
-            runner, _, _ = _make_runner(req.model, req.target)
+            runner, validation_level, _, _ = _make_runner(registry, req.model, req.target)
             prompts = (
                 req.prompts
                 if req.prompts is not None
@@ -195,7 +214,7 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
             )
             report = await runner.run(req.model, prompts)
 
-            result = JobResult(report=_report_to_response(report, validation_level="simulated"))
+            result = JobResult(report=_report_to_response(report, validation_level=validation_level))
             store.update_result(job_id, JobStatus.done, result)
         except Exception as exc:
             result = JobResult(

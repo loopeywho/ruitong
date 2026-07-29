@@ -47,14 +47,16 @@ async def lifespan(app: FastAPI):
 
     registry = BackendRegistry(config)
     # Register real backends when configured, fakes as fallback (P2.13)
+    # accept_any=True: registry-mode fakes accept any model id so the API
+    # path behaves identically to the old per-request construction (R7).
     if config.cuda_base_url:
         registry.register("cuda", VllmHttpBackend(name="cuda", base_url=config.cuda_base_url))
     else:
-        registry.register("cuda", FakeCuda())
+        registry.register("cuda", FakeCuda(accept_any=True))
     if config.ascend_base_url:
         registry.register("ascend", VllmHttpBackend(name="ascend", base_url=config.ascend_base_url))
     else:
-        registry.register("ascend", FakeAscend())
+        registry.register("ascend", FakeAscend(accept_any=True))
     app.state.router = Router(registry=registry, config=config)
     app.state.config = config
     app.state.job_store = JobStore(db_path=config.job_db_path)
@@ -102,16 +104,10 @@ async def health() -> dict[str, str]:
 
 @app.get("/v1/models")
 async def models() -> dict[str, list[str]]:
-    """List available models (from fake backends in dev)."""
-    models_set: set[str] = set()
-    for backend_cls in (FakeCuda, FakeAscend):
-        backend = backend_cls()
-        try:
-            for m in await backend.list_models():
-                models_set.add(m.id)
-        except Exception:
-            pass
-    return {"models": sorted(models_set)}
+    """List available models from the registry (R7 — uses registered backends)."""
+    router: Router = app.state.router
+    models_list = await router.registry.list_models()
+    return {"models": sorted({m.id for m in models_list})}
 
 
 # ── Middleware ────────────────────────────────────────────────────────

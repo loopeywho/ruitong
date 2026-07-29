@@ -80,9 +80,10 @@ class FakeCuda(Backend):
 
     name: str = "cuda"
 
-    def __init__(self, *, model_ids: list[str] | None = None) -> None:
+    def __init__(self, *, model_ids: list[str] | None = None, accept_any: bool = False) -> None:
         self._healthy: bool = True
         self._error: Exception | None = None
+        self._accept_any: bool = accept_any
         id_list = model_ids or ["qwen2.5-7b-instruct", "llama3-8b"]
         self._models: list[ModelInfo] = [
             ModelInfo(id=mid, backend=self.name, max_model_len=4096) for mid in id_list
@@ -109,7 +110,7 @@ class FakeCuda(Backend):
     async def chat(self, req: ChatRequest) -> ChatResponse:
         if self._error is not None:
             raise self._error
-        if not any(m.id == req.model for m in self._models):
+        if not self._accept_any and not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "cuda")
         choice_logprobs = _fake_logprobs(
             f"{req.model}-cuda", count=3, offset=_CUDA_OFFSET
@@ -134,7 +135,7 @@ class FakeCuda(Backend):
     async def stream(self, req: ChatRequest) -> AsyncIterator[ChatChunk]:
         if self._error is not None:
             raise self._error
-        if not any(m.id == req.model for m in self._models):
+        if not self._accept_any and not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "cuda")
         yield ChatChunk(
             id="chatcmpl-cuda-1",
@@ -155,9 +156,10 @@ class FakeAscend(Backend):
 
     name: str = "ascend"
 
-    def __init__(self, *, model_ids: list[str] | None = None) -> None:
+    def __init__(self, *, model_ids: list[str] | None = None, accept_any: bool = False) -> None:
         self._healthy: bool = True
         self._error: Exception | None = None
+        self._accept_any: bool = accept_any
         id_list = model_ids or ["qwen2.5-7b-instruct", "qwen3-8b"]
         self._models: list[ModelInfo] = [
             ModelInfo(id=mid, backend=self.name, max_model_len=4096) for mid in id_list
@@ -184,7 +186,7 @@ class FakeAscend(Backend):
     async def chat(self, req: ChatRequest) -> ChatResponse:
         if self._error is not None:
             raise self._error
-        if not any(m.id == req.model for m in self._models):
+        if not self._accept_any and not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "ascend")
         choice_logprobs = _fake_logprobs(
             f"{req.model}-ascend", count=3, offset=_ASCEND_OFFSET
@@ -209,7 +211,7 @@ class FakeAscend(Backend):
     async def stream(self, req: ChatRequest) -> AsyncIterator[ChatChunk]:
         if self._error is not None:
             raise self._error
-        if not any(m.id == req.model for m in self._models):
+        if not self._accept_any and not any(m.id == req.model for m in self._models):
             raise ModelNotFound(req.model, "ascend")
         yield ChatChunk(
             id="chatcmpl-ascend-1",
