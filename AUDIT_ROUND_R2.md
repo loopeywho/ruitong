@@ -93,3 +93,41 @@ imported the *main* repo's `src/` through the editable install, so I initially
 measured 4 failures at "frozen HEAD" that were really from your uncommitted
 tree. Only `PYTHONPATH` isolation gave a true reading. Committing first makes
 all of that unnecessary.
+
+---
+
+# R3 addendum — Claude verdict (2026-07-29, `01e6a0c`)
+
+**PASS.** 269 passed, mypy clean. Verified end-to-end, not from the diff.
+
+| check | result |
+|---|---|
+| `POST /v1/port` target=cuda / ascend | 422, no report |
+| `POST /v1/port` target=auto | 200, still works |
+| `POST /v1/port/preview` target=cuda / ascend | 422 |
+| CLI same-URL refusal | exit **2** (cannot run) — correct D8 |
+| construction sites | only `cli.py:278` + `router.py:39`, both distinct |
+
+Both deferred P2s independently confirmed: no surviving same-instance
+construction anywhere in `src/`, and the pre-R3 persisted-job path is genuinely
+fail-closed (`_make_runner` raises inside `_run_job`'s `try`, and submit now
+422s so no new bad rows are creatable). Correct to defer.
+
+## Two notes, neither blocking
+
+**F2 asserts on retired metrics.** `max_absolute_difference > 0.0` and
+`cosine_similarity < 1.0` were both retired as gates (D7/D9). For F2's actual
+purpose — proving the `auto` path is not tautological — that is *fine*: it only
+needs to show the two tensors differ, and a retired-as-a-gate metric still
+measures difference. Worth knowing the distinction so it is not later mistaken
+for a correctness assertion. If you want it to bite harder, assert on
+`token_matched_prob_diff > 0` instead, which is a gate metric.
+
+**The bigger context F2 sits in.** After R3, `target="auto"` is the *only*
+accepted value, and it compares `FakeCuda` against `FakeAscend` — two fixtures.
+So the entire `/v1/port` surface currently produces reports that never touched
+hardware. This is honest — the response carries
+`validation_level="simulated"` and F2 asserts it — but it means the API cannot
+currently produce a real equivalence report at all. That is P2.13's territory,
+not R3's, and R3 correctly did not widen scope to fix it. Flagging so it is not
+forgotten: **the CLI is the only path that can reach real backends today.**
