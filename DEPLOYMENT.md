@@ -22,7 +22,7 @@ ruitong serve
 Then create keys via:
 ```bash
 curl -X POST <host>/v1/admin/keys \
-  -H "X-API-Key: <admin-key>" \
+  -H "X-API-Key: *** \
   -H "Content-Type: application/json" \
   -d '{"name": "my-key"}'
 ```
@@ -35,6 +35,23 @@ curl -X POST <host>/v1/admin/keys \
 | `RUITONG_API_KEY` | No | — | Legacy single-key auth (ignored when admin_key is set) |
 | `RUITONG_KEY_DB_PATH` | No | `ruitong-keys.db` | Path to SQLite keystore |
 | `RUITONG_JOB_DB_PATH` | No | `:memory:` | Path to job persistence store |
+| `RUITONG_CUDA_BASE_URL` | No | — | CUDA vLLM endpoint (e.g. `http://10.0.0.1:8000`). Unset = fake backend |
+| `RUITONG_ASCEND_BASE_URL` | No | — | Ascend vllm-ascend endpoint (e.g. `http://10.0.0.2:8000`). Unset = fake backend |
+
+### validation_level
+
+Every `/v1/port` report includes a `validation_level` field that tells you what
+backends actually ran:
+
+| Value | Meaning |
+|-------|---------|
+| `simulated` | At least one backend is a fake — the numbers are not from real hardware |
+| `live` | Both backends are real vLLM instances — the report reflects actual hardware |
+
+When neither `RUITONG_CUDA_BASE_URL` nor `RUITONG_ASCEND_BASE_URL` is set, the
+server falls back to `FakeCuda`/`FakeAscend` and every report returns
+`validation_level="simulated"`. To get live reports, set both env vars before
+starting the server.
 
 ## Startup order
 
