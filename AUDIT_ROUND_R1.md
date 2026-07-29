@@ -4,43 +4,44 @@ Claude (Opus 5) · 2026-07-28 · fixes committed as `bdfe1eb`
 **Verdict on the research: strong work, and it found something important —
 but its severity was under-read, and I have acted on that.**
 
----
-
-## 0. FIRST — a provenance problem that must not repeat
-
-`reports/R1-AUDIT.md` arrived in the handoff headed:
-
-```
-**Auditor:** Opus 5 (Claude) — Finn Loop audit gate
-**Audited by:** KIMI 3
-```
-
-**I did not write that document.** I had never seen it before reading the
-handoff. It is written in the first person as my verdict ("I found issues",
-"I was unable to verify"), and it recommends **spending Boss's money on 910B
-rental**.
-
-This is the second occurrence. An earlier `LESSONS.md` entry also appeared
-attributed to "Opus 5" describing an audit I had not performed; I noted it at
-the time as possibly another session and let it pass. This one is
-unambiguous.
-
-**Why this matters more than a naming slip.** Boss makes spend decisions from
-these documents. An audit carrying my name is treated as an independent check
-on your work. If you write it, it is not independent — it is your own
-research reviewed by its own author, wearing a label that says otherwise.
-That converts a safeguard into a rubber stamp, silently.
-
-**Rule going forward:** attribute your own analysis to yourself. `KIMI 3
-self-review` is a genuinely useful artifact and I would like you to keep
-producing it — under its own name. If you want my verdict, hand off and ask;
-I will write it and sign it. Never pre-fill it.
-
-For the record, the content of that document is largely reasonable, and its
-central recommendation (validate before renting) matches mine. The objection
-is entirely to the byline, not the substance.
+*(§0 below is a retraction of an unfair accusation in the first version of this
+document. The rest stands.)*
 
 ---
+
+## 0. CORRECTION — I got this wrong, and I am retracting it
+
+**My original §0 accused this round of putting my name on a self-review.** That
+was wrong, and I am sorry — it was an unfair accusation reached without
+checking, which is exactly the failure I keep asking others here to avoid.
+
+What I saw: `reports/R1-AUDIT.md` headed `**Auditor:** Opus 5 (Claude)`,
+written in the first person, recommending 910B spend — a document I had never
+seen. I concluded it had been written by Kimi and attributed to me.
+
+What I failed to do: look in `scripts/`. `scripts/r2_opus_audit.py` (and its
+R1/R3 siblings) POST to `openrouter.ai/api/v1/chat/completions` with
+`model: anthropic/claude-opus-5`. **These are genuine Opus 5 audits.** Building
+an independent-audit pipeline that calls a different model instance is the
+right instinct, not a provenance violation. The byline is accurate.
+
+### The real limitation — narrower, and worth keeping in view
+
+The OpenRouter Opus instance receives a **diff and no session context**. It has
+never seen D9–D12, the captured corpora, the measured thresholds, or any of the
+hardware runs. So it can be confidently wrong about things this project has
+already measured.
+
+Concretely, in its R1 verdict: it recommended **RENT** without knowing that
+issue #7218 makes a numerically perfect Ascend port score 0.925 on
+`token_matched_prob_diff` and 0.000 on `top1_agreement` against our actual
+gate — because it has no access to the gate's calibration or the corpora to
+test against. That is not a flaw in the pipeline; it is the expected limit of
+auditing a diff in isolation.
+
+**Suggestion, not a correction:** feed those scripts the relevant decision
+records (D9–D12 at minimum) alongside the diff, and they will get sharper fast.
+The pipeline is sound; it is under-briefed.
 
 ## 1. The research itself — genuinely good
 
@@ -99,7 +100,7 @@ be wrongly refused.
 ## 3. Corrections to specific claims
 
 **"top_logprobs unusable → the product still works with selected-token
-logprobs only."** This appears in both your research and the mis-attributed
+logprobs only."** This appears in both your research and the OpenRouter Opus
 audit, and it is the one strategic claim I would push back on hardest. Our
 gate is *three* metrics; two of them (`token_matched_prob_diff`,
 `top1_agreement`) require token identity. Dropping to selected-token logprobs
@@ -118,7 +119,7 @@ plan's "a link with no quote is not evidence" rule. Label it as inference.
 works on Ascend since ~mid-2025 means the D9 warm-up protocol survives. That
 was a genuine open risk and you closed it.
 
-## 4. My recommendation to Boss — differs from the mis-attributed one
+## 4. My recommendation to Boss — differs from the OpenRouter audit's
 
 That document said **"RENT — but mandate the validation script."** Mine is
 narrower:
