@@ -85,6 +85,11 @@
          font-size:14px;color:var(--mut)}
   a{color:var(--accent)}
   [data-lang]{display:none}
+  #langsel{display:inline-flex;gap:0;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  #langsel button{border:none;border-radius:0;padding:5px 9px;font-size:12px;background:transparent;
+    color:var(--mut);cursor:pointer;border-right:1px solid var(--line)}
+  #langsel button:last-child{border-right:none}
+  #langsel button[aria-pressed="true"]{background:var(--accent);color:#fff}
   [data-lang].on{display:block}
   th[data-lang].on,td[data-lang].on,span[data-lang].on{display:table-cell}
   span[data-lang].on{display:inline}
@@ -96,7 +101,11 @@
 <header>
   <div class="brand">瑞通 Ruitong<span>ruitong.io</span></div>
   <div class="controls">
-    <button id="lang" aria-pressed="false">中文</button>
+    <span id="langsel" role="group" aria-label="Language">
+      <button data-set="en" aria-pressed="true">EN</button>
+      <button data-set="zh" aria-pressed="false">中文</button>
+      <button data-set="ru" aria-pressed="false">RU</button>
+    </span>
     <button id="theme" aria-pressed="false">◐</button>
   </div>
 </header>
@@ -559,9 +568,184 @@
 </main>
 
 <footer>
+<main data-lang="ru">
+
+  <h1>Та же модель, другой ускоритель.<br>Насколько на самом деле меняются ответы?</h1>
+
+  <p class="lead">Этот показатель никто не публикует. Мы — будем.</p>
+
+  <p>Если вы переносите LLM с NVIDIA на Huawei Ascend, AMD, Intel Gaudi или отечественный
+  ускоритель, выходные данные не будут идентичными. Сложение чисел с плавающей запятой не
+  ассоциативно: разные ядра суммируют в разном порядке, и логарифмические вероятности
+  смещаются. Это ожидаемо и неизбежно.</p>
+
+  <p>Важен другой вопрос — <strong>насколько</strong>, и является ли наблюдаемое изменение
+  обычным численным шумом или настоящим дефектом переноса. Сегодня нет публичного эталона,
+  с которым это можно сопоставить.</p>
+
+  <div class="callout">
+    <p style="margin:0"><strong>Почему это важно именно сейчас.</strong> Если доступ к NVIDIA
+    ограничен, выбора нет — модель придётся переносить на другое железо. Но перенос без
+    доказательства эквивалентности означает, что вы разворачиваете в продакшн модель, поведение
+    которой никто не проверял. Регламенты, отраслевые требования и внутренний контроль качества
+    требуют доказательства, а не обещания.</p>
+  </div>
+
+  <h2>Первое реальное измерение между ускорителями</h2>
+
+  <p>NVIDIA A40 (Ampere) против NVIDIA RTX 6000 Ada. Один производитель, одинаковые 48&nbsp;ГБ,
+  один и тот же образ vLLM, одна и та же модель <code>Qwen3-8B</code>, один и тот же seed. Обе
+  стороны прогреты и побитово воспроизводимы по отдельности. Единственная переменная — кристалл.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Показатель</th><th>Результат</th></tr></thead>
+    <tbody>
+      <tr><td>Текст ответа полностью совпал</td><td class="num">45 / 61 запрос</td></tr>
+      <tr><td><strong>Текст ответа различался</strong></td><td class="num"><strong>16 / 61 (26%)</strong></td></tr>
+      <tr><td>Совпадение top-1 токена (до расхождения)</td><td class="num">1.000</td></tr>
+      <tr><td>Макс. Δвероятности по совпадающим токенам</td><td class="num">0.195</td></tr>
+      <tr><td>Отклонение вероятностной массы</td><td class="num">0.0000791</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>Два ускорителя NVIDIA с идентичным программным стеком дают разный текст на 26%
+  запросов</strong> (95% доверительный интервал 16.8–38.4%). Не просто другое распределение —
+  другие предложения.</p>
+
+  <p class="mut">Измерено дважды на независимо арендованных инстансах. При ограничении выборки
+  теми же 16 запросами, что и в первом прогоне, результат совпал до девятого знака после запятой
+  (0.122442606) — то есть это детерминированное свойство пары ускорителей, а не случайность
+  конкретной аренды. Обе стороны показали побитовую воспроизводимость, 61/61.</p>
+
+  <p><strong>Расхождение связано с длиной вывода, а не с типом запроса.</strong> Расширяя
+  корпус, мы ожидали, что доминировать будут открытые генеративные запросы. Этого не произошло:
+  разошлись и два коротких фактических вопроса — включая «какова химическая формула воды?» при
+  13 сгенерированных токенах. У разошедшихся запросов в среднем 49 токенов против 41 по всему
+  корпусу. Практический вывод: <em>чем длиннее генерация, тем больше расхождений</em> — задача
+  классификации и задача длинной генерации несут разный риск.</p>
+
+  <h2>Что обнаруживает наш порог — измерено на реальном железе</h2>
+
+  <p>Прежде чем публиковать расхождения точности, нужно было доказать, что само измерение
+  работает. Порог откалиброван на корпусе реальных логарифмических вероятностей, снятых
+  с <strong>Qwen3-8B на NVIDIA A40</strong>, а не на синтетике. Мы вносим дефекты, имитирующие
+  реальные ошибки переноса, и фиксируем, ловит ли их порог и на каком уровне.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Сценарий</th><th>Что имитирует</th><th>Δвероятности</th><th>Вердикт</th></tr></thead>
+    <tbody>
+      <tr><td>Полное совпадение</td><td>—</td><td class="num">0.0</td><td class="pass">пройдено</td></tr>
+      <tr><td>Округление bfloat16</td><td>корректный перенос, другая точность</td><td class="num">1.29e-03</td><td class="pass">пройдено</td></tr>
+      <tr><td>Масштабирование ×1.05</td><td>ошибка softmax / температуры</td><td class="num">1.80e-02</td><td class="fail">не пройдено</td></tr>
+      <tr><td>Порча 1 позиции из 8</td><td>периодический сбой ядра</td><td class="num">0.993</td><td class="fail">не пройдено</td></tr>
+      <tr><td>Перестановка top-2</td><td>транспонированный вывод оператора</td><td class="num">1.000</td><td class="fail">не пройдено</td></tr>
+      <tr><td>Сдвиг позиций на 1</td><td>ошибка индексации KV-кэша</td><td class="num">1.000</td><td class="fail">не пройдено</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Три вещи, найденные при калибровке, которые мы предпочитаем опубликовать, а не скрыть</h3>
+
+  <p><strong>vLLM побитово воспроизводим — но только при прогретом префиксном кэше.</strong>
+  Повторный запрос к прогретому серверу даёт логарифмические вероятности, совпадающие до
+  последнего бита (61 запрос из 61). Но <em>первое</em> исполнение запроса не даёт ни одного
+  попадания в кэш и возвращает заметно другие значения — до <strong>0.087</strong> по
+  вероятности токена, при этом сгенерированный текст идентичен. Это в <strong>24 раза
+  больше</strong>, чем самый слабый дефект, который порог обязан поймать.</p>
+
+  <p class="mut">Это ловушка любого наивного сравнения A/B: та сторона, что «холоднее», выглядит
+  сломанной, и тест измеряет кэш, а не кристалл. Наш инструмент прогревает обе стороны на каждом
+  запросе и отбрасывает результат до начала измерения. После прогрева эталонная сторона вносит
+  <em>нулевой</em> шум — только это и позволяет отнести расхождение к целевому ускорителю.</p>
+
+  <p><strong>Косинусное сходство не обнаруживает ошибки масштабирования.</strong> По определению
+  оно инвариантно к масштабу: умножьте все логарифмические вероятности на 1.01 или на 2.0 —
+  результат в обоих случаях ровно <code>1.0000000000</code>. Этот показатель широко применяют
+  для такой проверки, и он для неё непригоден. Мы от него отказались.</p>
+
+  <p><strong>Сравнение логарифмических вероятностей по рангу сравнивает не те токены.</strong>
+  В хвосте top-k многие токены почти равны, и ничтожное возмущение меняет их порядок — мы
+  зафиксировали на одной позиции ранг 3 с <code>&#39;高&#39;</code> с одной стороны и
+  <code>&#39; like&#39;</code> с другой. Мы сопоставляем токены по идентичности и сравниваем
+  вероятности, а не логарифмы.</p>
+
+  <h2>Что мы ещё не измерили</h2>
+
+  <div class="callout pending">
+    <p style="margin:0"><strong>Мы не публикуем числа, которые не измерили.</strong> Базовая
+    линия на одном производителе измерена и приведена выше. Кросс-вендорные строки и строка
+    Ascend — нет, и они отмечены как таковые. Результаты и исходный JSON появляются здесь по мере
+    готовности.</p>
+  </div>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Модель</th><th>Эталон</th><th>Проверяемый</th><th>Статус</th></tr></thead>
+    <tbody>
+      <tr><td>Qwen3-8B</td><td>A40 bf16, прогрет</td><td>RTX 6000 Ada bf16</td><td class="pass">готово — 26%</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td class="mut">в очереди</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>Ascend 910B</td><td class="mut">v3</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>Метод</h2>
+
+  <ul>
+    <li>Сравнение идёт только по логарифмическим вероятностям через совместимый с OpenAI
+    HTTP-эндпоинт — инструмент не знает, какой кристалл за ним стоит. Ascend, ROCm, Gaudi,
+    Trainium работают без изменений.</li>
+    <li>Обе стороны прогреваются на каждом запросе; результат прогрева отбрасывается.</li>
+    <li>Сервер, выдающий <code>-inf</code>, <code>NaN</code> или вырожденные идентификаторы
+    токенов, помечается как <strong>«невозможно проверить»</strong>, а не как «перенос сломан».
+    Это разные ситуации, требующие противоположных действий.</li>
+    <li><strong>Публикуются исходные данные</strong>, а не только итоговая таблица.</li>
+  </ul>
+
+  <h2>Для кого это</h2>
+
+  <p>Для тех, кто переносит рабочую нагрузку с NVIDIA на другое железо и должен доказать —
+  регулятору, заказчику или собственной службе качества, — что поведение модели не изменилось.
+  Эталонная таблица публична и бесплатна. Если нужно прогнать проверку на <strong>вашей</strong>
+  модели и вашем оборудовании — напишите нам.</p>
+
+  <section class="contact">
+    <h2 style="margin-bottom:6px">Связаться</h2>
+    <p class="mut" style="margin-top:0">Письмо уходит из вашего почтового клиента прямо к нам.
+    Ни формы-посредника, ни стороннего сервиса, ни аналитики — заявку не видит никто, кроме нас.</p>
+    <label for="r-org">Имя / организация</label>
+    <input id="r-org" type="text" autocomplete="organization">
+    <div class="row">
+      <div>
+        <label for="r-from">Переносите с</label>
+        <select id="r-from">
+          <option>NVIDIA (CUDA)</option><option>AMD (ROCm)</option>
+          <option>Huawei Ascend (CANN)</option><option>Другое</option>
+        </select>
+      </div>
+      <div>
+        <label for="r-to">Переносите на</label>
+        <select id="r-to">
+          <option>Huawei Ascend (CANN)</option><option>AMD (ROCm)</option>
+          <option>NVIDIA (CUDA)</option><option>Другое</option>
+        </select>
+      </div>
+    </div>
+    <label for="r-model">Модель</label>
+    <input id="r-model" type="text" placeholder="например Qwen3-8B или внутренний файн-тюн">
+    <label for="r-msg">Что нужно доказать</label>
+    <textarea id="r-msg" placeholder="например: службе рисков нужны доказательства, что после переноса поведение модели не изменилось"></textarea>
+    <button class="send" data-mail="ru">Написать нам</button>
+  </section>
+
+</main>
+
   <p><span data-lang="en" class="on">瑞通 Ruitong — vendor-neutral accelerator equivalence.
   Method and tooling open; reference data published as measured.</span><span data-lang="zh">瑞通
-  Ruitong — 厂商中立的加速卡等价性验证。方法与工具开放，参考数据实测后发布。</span></p>
+  Ruitong — 厂商中立的加速卡等价性验证。方法与工具开放，参考数据实测后发布。</span><span data-lang="ru">瑞通 Ruitong — независимая от производителя проверка эквивалентности ускорителей. Метод и инструменты открыты; эталонные данные публикуются как измерены.</span></p>
   <p><small>ruitong.io</small></p>
 </footer>
 
@@ -569,23 +753,31 @@
 
 <script>
 (function(){
-  var langBtn=document.getElementById('lang'), themeBtn=document.getElementById('theme');
-  var zh=false;
-  langBtn.addEventListener('click',function(){
-    zh=!zh;
+  var themeBtn=document.getElementById('theme');
+  var LOCALE={en:'en',zh:'zh-CN',ru:'ru'};
+  function setLang(code){
     document.querySelectorAll('[data-lang]').forEach(function(el){
-      el.classList.toggle('on', el.getAttribute('data-lang')===(zh?'zh':'en'));
+      el.classList.toggle('on', el.getAttribute('data-lang')===code);
     });
-    document.documentElement.lang = zh?'zh-CN':'en';
-    langBtn.textContent = zh?'EN':'中文';
-    langBtn.setAttribute('aria-pressed', zh?'true':'false');
+    document.documentElement.lang = LOCALE[code]||'en';
+    document.querySelectorAll('#langsel button').forEach(function(b){
+      b.setAttribute('aria-pressed', b.getAttribute('data-set')===code ? 'true':'false');
+    });
+  }
+  document.querySelectorAll('#langsel button').forEach(function(b){
+    b.addEventListener('click',function(){ setLang(b.getAttribute('data-set')); });
   });
+  // Open in the visitor's own language when we publish in it.
+  var nav=(navigator.language||'en').toLowerCase();
+  if(nav.indexOf('zh')===0) setLang('zh');
+  else if(nav.indexOf('ru')===0) setLang('ru');
   // Compose a structured mailto. No backend, no third-party form service:
   // enquiries go straight from the sender's mail client to the inbox, so no
   // one else ever sees a lead.
   document.querySelectorAll('.send').forEach(function(btn){
     btn.addEventListener('click',function(){
-      var p = btn.getAttribute('data-mail')==='zh' ? 'z' : 'e';
+      var m = btn.getAttribute('data-mail');
+      var p = m==='zh' ? 'z' : (m==='ru' ? 'r' : 'e');
       var v = function(id){ var el=document.getElementById(p+'-'+id); return el?el.value.trim():''; };
       var isZh = p==='z';
       var org=v('org')||(isZh?'（未填写）':'(not given)');
