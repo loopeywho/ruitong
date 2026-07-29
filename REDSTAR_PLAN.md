@@ -6,7 +6,9 @@ Maintained by Claude (audit + direction). Boss gates all spend and launches.
 Open items only. History lives in `DECISIONS.md`, `LESSONS.md`, `CALIBRATION.md`
 — read those once, not every round.
 
-**State:** code HEAD post-D12 (2026-07-28) · 258 tests · mypy clean on 26 files.
+**State:** code HEAD `27415d5` (2026-07-29) · 277 tests · mypy clean on 26 files.
+**Current queue: R8 then R9** (both Ascend-facing, no hardware, bottom of this
+file). R1–R7 are done; R4 and the C1 remainder are deferred.
 Verify with `uv run --extra dev pytest -q` and `uv run mypy src/ruitong`, and
 quote the real output. Never report a verdict you did not run.
 
@@ -330,3 +332,114 @@ The CLI is currently the only path that can reach real hardware.
   and mixing it into this change would make the diff hard to audit.
 - Renting hardware. Use a stub HTTP server; `tools/mock_vllm.py` already exists
   for exactly this.
+
+---
+
+# R8 / R9 — dispatched 2026-07-29, after R7 (`27415d5`)
+
+Both are **Ascend-facing and need no hardware.** Boss's market read has
+sharpened the target: the paying customer is a Western developer entering
+China, not a Chinese buyer — they have the compliance budget and no in-house
+Ascend expertise. That makes the Ascend evidence the differentiator, but it
+also means we must not spend on 910B until we know the evidence is obtainable
+at all. R8 answers that. R9 makes the eventual rental cheap and safe.
+
+R4 (keystore `hash_scheme`) and the C1 remainder stay deferred — neither moves
+the business.
+
+---
+
+## R8 — Is `token_id:NNNNN` a bug, or Ascend's normal serialisation? 🔴 blocking
+
+**This is the single highest-value open question in the project, and it costs
+nothing to answer.**
+
+`vllm-ascend` issue #7218 shows `top_logprobs` entries rendered as
+`"token": "token_id:101850"` rather than a decoded string like `"the"`. Your R1
+research read this as part of the duplication bug. It may be separate.
+
+**Why the distinction decides the product.** Two of our three gate metrics —
+`token_matched_prob_diff` and `top1_agreement` — compare tokens **by decoded
+string**. NVIDIA vLLM returns `"the"`. If Ascend returns `token_id:101850`
+*as normal behaviour*, then token identity **never matches across
+CUDA↔Ascend even when both sides are perfectly correct**, and those two metrics
+are structurally unusable on that pairing — not broken by a version bug, but
+inapplicable by design.
+
+Measured, that scenario scores `token_matched_prob_diff` **0.925** and
+`top1_agreement` **0.000** against a numerically *perfect* port
+(`AUDIT_ROUND_R1.md` §2). So:
+
+- **If it is a bug** → version-pin around it, product works, rent with confidence.
+- **If it is normal serialisation** → we cannot certify CUDA↔Ascend with the
+  current gate at all, and that is a D-level decision for Boss, not a patch.
+
+### What to determine
+
+1. Does `vllm-ascend` decode `top_logprobs[].token` to a string, or emit a
+   `token_id:N` reference? Read the **serialisation path in source**, not just
+   the issue thread — the issue reporter's client config may be the cause.
+2. Is `token_id:N` produced when the detokeniser is unavailable or disabled
+   (e.g. `--skip-tokenizer-init`, `detokenize=False`), rather than always?
+3. Does upstream vLLM (CUDA) ever emit the same form? If both can, the
+   condition is shared and configurable rather than vendor-specific.
+4. Same question for the **selected-token** `logprobs.content[].token`, not
+   just `top_logprobs` — the selected token may decode correctly while the
+   alternatives do not.
+
+**Deliverable:** append a section to `RESEARCH_ASCEND_LOGPROBS.md`. Same
+evidence standard: URL **and** quoted snippet for every claim, source code
+preferred over issue comments. If it cannot be determined without hardware,
+**say so explicitly** — that is a valid and useful answer, and it converts R9
+into the way we find out.
+
+**Acceptance:** Claude can decide from your section alone whether
+CUDA↔Ascend token-identity comparison is (a) fine, (b) fine with a version
+pin, or (c) structurally impossible — without opening a link.
+
+---
+
+## R9 — Ascend validation script, debugged on NVIDIA 🟠
+
+Write the pre-flight check that runs as the **first command** on any rented
+Ascend instance and aborts before we spend further. Debug it against our
+existing NVIDIA setup, where correct output is already known — writing it
+against a live 910B is the expensive way to discover the script itself has a
+bug.
+
+**File:** `tools/validate_backend.py`. Takes `--endpoint` and `--model`, exits
+`0` usable / `1` unusable, and prints *why*.
+
+**Checks, in this order — cheapest and most decisive first:**
+
+1. `/v1/models` responds and lists the expected model.
+2. A single request with `logprobs=true, top_logprobs=5` returns a populated
+   `logprobs.content[]`.
+3. **Token identity is usable** — `top_logprobs[].token` values within a row
+   are not all identical (vllm-ascend#7218), and are decoded strings rather
+   than `token_id:N` references (R8).
+4. **No sentinel or non-finite values** — no `-9999` (vllm#19305), no `-inf`
+   or `NaN` (vllm-ascend#2934). Report the count, not just pass/fail.
+5. **Probability mass is plausible** — `sum(exp(logprob))` over the returned
+   top-k is in `(0, 1]`. A row summing above 1 means the values are not a
+   log-softmax at all.
+6. **Warm-repeat determinism** — send the same prompt three times, discard the
+   first (cold prefix cache, D9), assert calls 2 and 3 are bit-identical. If
+   they are not, the D9 warm-up protocol does not hold on that backend and
+   every downstream number is unattributable.
+
+**Reuse, do not reimplement:** `count_non_finite` and
+`count_degenerate_token_rows` already exist in `equivalence/metrics.py` and are
+calibrated against real corpora. Import them.
+
+**Acceptance:**
+- Run against `tools/mock_vllm.py` (or a stub) → exits 0.
+- A test injects each failure mode and asserts the script exits 1 **and names
+  the specific check that failed** — a validator that says only "failed" is
+  not worth running on rented hardware.
+- **Mutation-test it.** Break each check in turn and confirm the corresponding
+  test fails. A check that cannot fail is decoration, and this script's whole
+  job is to fail loudly at the right moment. My own regression tests in R7
+  were vacuous and passed under mutation — see `LESSONS.md` 2026-07-29.
+
+**Explicitly out of scope:** renting anything. Boss gates all spend.
