@@ -1,63 +1,64 @@
 # R3 Audit — Opus 5
-*Audited: 2026-07-29 00:43 | SHA: e516a80 (HEAD: ce1a10b5d9db37e664189b14275c42df51cbbcee) | Model: anthropic/claude-opus-5*
-*Input: 6552 | Output: 5770*
+*Audited: 2026-07-29 01:29 | SHA: e516a80 (HEAD: 040c9575b976bfd38476f8779ee0324bc6e89c69) | Model: anthropic/claude-opus-5*
+*Input: 6571 | Output: 6094*
 
-# Audit — Ruitong Bridge R3 (removal of single-target self-comparison false pass)
+# Audit — R3: removal of single-target self-comparison false pass
 
-**HEAD:** `ce1a10b` · **R3 commit:** `e516a80` · **Port tests:** 25 passed / 0 failed
-
-## Verdict: **CONDITIONAL PASS**
-
-The API-surface defect is genuinely fixed: the tautological `EquivalenceRunner(x, x)` construction is *deleted* (not flagged, not warned about), the schema refuses the inputs that reached it, and the tests that used to *assert* the false pass are gone rather than skipped. Two verification gaps prevent an unconditional PASS — one about entrypoints outside `src/ruitong/api/`, one about whether the surviving `auto` path is itself a disguised self-comparison.
+**Commit under review:** `e516a80` (verified against HEAD `040c957`, which carries the R2 fix on top)
 
 ---
 
-## Criterion-by-criterion
+## Criteria results
 
-| # | Criterion | Result | Basis |
+| # | Criterion | Result | Evidence |
 |---|---|---|---|
-| 1 | `/v1/port` rejects `target="cuda"` with 422 | **PASS** | `pattern=r"^auto$"` rejects at Pydantic validation → FastAPI 422; `test_port_cuda_single` asserts it and passes |
-| 2 | `/v1/port` rejects `target="ascend"` with 422 | **PASS** | Same mechanism; `test_port_ascend_single` passes |
-| 3 | `/v1/port/preview` rejects single-target with 422 | **PASS** | Preview binds the same `PortRequest`; rejection happens *at submit* (422), not as a background-job error after a 202 — confirmed by the rewritten `test_preview_accepts_target` |
-| 4 | `target="auto"` still produces a valid report | **PASS (shape only)** | `test_port_auto`, `test_port_response_shape`, `test_port_includes_calibrated_metrics` pass; see F2 for the semantic caveat |
-| 5 | Any remaining path to single-target `passed: True` | **NOT PROVEN** — none in `api/`, unverified elsewhere | See F1 |
-| 6 | Old false-pass tests replaced, not co-resident | **PASS** | The `assert data["passed"] is True  # self-comparison always passes` line and the `val == 1.0` / `val == 0.0` self-comparison assertions are deleted from `tests/test_api.py`; no `@pytest.mark.skip` or `xfail` shell left behind. 25 passed / 244 deselected with no skips in the port selection |
+| 1 | `POST /v1/port` rejects `target="cuda"` with 422 | **MET** | `PortRequest.target` pattern is now `^auto$` → pydantic rejects at body validation. `test_port_cuda_single` asserts 422 and passes. |
+| 2 | `POST /v1/port` rejects `target="ascend"` with 422 | **MET** | Same mechanism; `test_port_ascend_single` asserts 422 and passes. |
+| 3 | `POST /v1/port/preview` rejects single-target with 422 | **MET** | Preview shares `PortRequest`; rejection happens before job submission (no 202 + no job row). `test_preview_accepts_target` asserts 422 and passes. |
+| 4 | `target="auto"` still produces a valid report | **MET** | `test_port_auto` gets 200, full `PortReport` shape, 3 per-prompt rows, and — importantly — asserts `max_absolute_difference > 0` and `cosine_similarity < 1.0`, i.e. it *proves* the auto path is not a disguised self-comparison. This is the correct guard; without it, someone could "fix" R3 by making `auto` return `FakeCuda` twice and all tests would still pass. |
+| 5 | Any remaining path to single-target `passed: True` | **MET for the two demonstrated entry points**; residual verification gap (F1) | `_make_runner` is now the sole constructor for the request path, and its `else` branch fails closed with 422 rather than constructing `EquivalenceRunner(x, x)`. No `EquivalenceRunner(cuda, cuda)` / `(ascend, ascend)` construction survives in the reviewed file. |
+| 6 | Old passing-report tests replaced, not duplicated | **MET** | The diff *rewrites* the three test bodies in place (no new test names added alongside old ones), and the current `tests/test_api.py` contains no assertion that a single-target run returns `passed: True` or all-1.0/0.0 metrics. Port suite: 25 passed, 0 skipped, 0 xfail. |
 
-Defence-in-depth is correctly layered, which matters more than it looks: Pydantic v2's `pattern` is *search*, not *fullmatch*, and under the Python-`re` fallback engine `$` also matches before a trailing newline. So `target="auto\n"` can slip past the regex — and lands in `_make_runner`'s `else`, which raises 422. The redundant guard is load-bearing for that edge case. Good.
+The core defect is genuinely gone: the tautological `EquivalenceRunner(cuda, cuda)` construction — which returned `cosine_similarity=1.0`, `max_absolute_difference=0.0`, `passed=True` for a backend compared against itself — no longer exists, and every removal is enforced by a test that fails if it comes back.
 
 ---
 
 ## Findings
 
-### F1 — P2: Fix is scoped to the HTTP surface; other entrypoints unaudited
-The diff touches only `api/__init__.py` and `api/router.py`. `EquivalenceRunner` accepts any two backends, and nothing in the runner itself refuses `runner.a is runner.b`. If a CLI (`ruitong port --target cuda`), notebook example, or `jobs/` helper constructs `EquivalenceRunner(cuda, cuda)`, the false `passed: True` survives — with the same operator-facing meaning, just not over REST. Criterion 5 cannot be answered PASS on the evidence supplied.
+### F1 — P2: Non-request entry points and full-suite evidence not shown
+The test output is scoped (`244 deselected`). Two things are therefore unverified by the evidence presented:
 
-**Required before sign-off:**
-```
-rg -n 'EquivalenceRunner\(' --type py -g '!tests/**'
-rg -n 'target' src/ruitong/cli* src/ruitong/jobs/ docs/ README*
-```
-Any site where both arguments are the same object/class must be removed or made to raise. **Strongest remedy:** put the guard in `EquivalenceRunner.__init__` (`raise ValueError` if the two backends are the same instance or same class), so the invariant holds for every caller and the API regex becomes a convenience, not the sole defence.
+- **Other callers / entry points.** `_make_runner` is a router-private helper. If a CLI (`ruitong port --target cuda`), a benchmark script, or a notebook constructs `EquivalenceRunner` directly with the same backend twice, the false-pass survives there — the schema pattern only guards the HTTP boundary. Required check: `rg -n "EquivalenceRunner\(" --glob '!tests/**'` and confirm no call site passes the same object/class twice; `rg -n '"cuda"|"ascend"' src/ruitong/cli*` for a surviving single-target flag.
+- **Cross-file test residue.** Criterion 6 is verified for `tests/test_api.py` only. Any other test file (jobs, e2e, docs snippets) that still asserts a single-target run returns a report would now fail or, worse, still pass against a stale code path. Required check: full-suite green, plus `rg -n 'target.*(cuda|ascend)' tests/`.
 
-### F2 — P2: No test proves the surviving `auto` path isn't also a tautology
-R3's premise is that self-comparison is worthless because it cannot fail. The `auto` path compares `FakeCuda` vs `FakeAscend` — two *simulated* backends. If both derive logits from the same generator/seed and differ only in label, `auto` is a self-comparison wearing a costume, and R3 removed the honest tautology while keeping a concealed one. Nothing in the test suite excludes this: `test_port_auto` asserts only shape and key presence; no test asserts `cosine_similarity < 1.0`, `max_absolute_difference > 0.0`, or that a deliberately divergent backend yields `passed: False`.
+### F2 — P2: Persisted pre-R3 job payloads replay through the worker, not through validation
+`JobStore` persists submitted jobs. A job row written before R3 with `target="cuda"` is resumed/executed **without** re-passing `PortRequest` validation — it reaches `_make_runner` directly. The behaviour is *fail-closed* (the `else` branch raises), so **no false pass is produced** — this is the correct outcome and the reason the `else` branch must be kept rather than deleted as "dead code". However:
 
-**Required:** inspect `backends/fake.py` for distinct divergence, then add a test that pins non-triviality, e.g. `assert data["metrics"]["max_absolute_difference"] > 0.0`, plus a negative test where an injected-divergence backend drives `passed is False`. Until a run *can* fail, `passed: True` from `/v1/port` carries no information — which is the exact defect R3 set out to remove.
+- `_make_runner` raises `HTTPException(422)` in a background-task context, where there is no request/response cycle to translate it. Depending on the worker's exception handling, that job either lands in `status="error"` with a confusing HTTP-shaped detail, or — if the worker only catches specific exception types — is left stuck in `running`/`pending` forever.
+- Recommendation: have `_make_runner` raise a domain error (`ValueError` / `UnsupportedTargetError`) and translate it to 422 at the router edge, so both the sync and async paths degrade predictably. Confirm the worker's `except` is broad enough to mark the job `error`.
 
-### F3 — P3: The explanatory R3 message is unreachable in practice
-Because Pydantic rejects `"cuda"` first, callers receive `String should match pattern '^auto$'` — not the carefully written *"single-target self-comparison was removed (R3)"* detail in `_make_runner`. The useful diagnostic only fires on the newline edge case. An integrator who upgrades and gets a regex error has no path to the rationale.
+### F3 — P3: The informative error message is unreachable for the cases it was written for
+The `detail` string in `_make_runner` explains the R3 rationale, but for `target="cuda"` the client never sees it — pydantic short-circuits with the generic `String should match pattern '^auto$'`. The friendliest message is only emitted for inputs that slip past the regex. Consider a `field_validator` on `target` (or `Literal["auto"]` plus a custom exception handler) so the rationale actually reaches the caller.
 
-**Suggested:** replace the regex with `Literal["auto"]` (better OpenAPI: renders as an enum) plus a `field_validator` that raises the R3 message, or accept the legacy values in the schema and let `_make_runner`'s 422 do the refusing.
+### F4 — P3: Prefer `Literal["auto"]` over `pattern=r"^auto$"`
+Three reasons:
+1. **OpenAPI quality.** `Literal` emits `enum: ["auto"]`; the regex emits an opaque `pattern`, which generated clients render as a free-form string and only fail at runtime.
+2. **Anchor semantics.** Pydantic v2 `pattern` uses *search* semantics, so the `^`/`$` anchors are load-bearing here — they are correctly present, but the construct is engine-dependent (`rust-regex` default vs. `python-re` fallback, which treats `$` as also matching before a trailing `\n`). Under the Python engine, `target="auto\n"` would pass validation and fall through to the `else` branch — fail-closed, but it needlessly widens the surface that F2's exception-type problem applies to. `Literal` has no such quirk.
+3. The field now has exactly one legal value, which is precisely what `Literal` expresses.
 
-### F4 — P3: The redundant guard has no test
-`_make_runner`'s `else` branch is unreachable via HTTP, so no test exercises it. If someone later reintroduces `elif target == "cuda": return EquivalenceRunner(cuda, cuda), ...` alongside a widened regex, the suite stays green.
+### F5 — P3: Unannounced breaking API change on a `/v1` path
+`target="cuda"|"ascend"` went from 200 to 422 with no version bump, deprecation window, or changelog entry in the diff. This is the right call on safety grounds — a false `passed: True` is worse than a hard refusal, as the docstring correctly argues — but it should be recorded as a breaking change so downstream callers aren't surprised. Confirm no README/API-docs/example still advertises `target: cuda`.
 
-**Suggested:** direct unit test — `pytest.raises(HTTPException)` on `_make_runner("Qwen3-8B", "cuda")`, asserting `.status_code == 422`.
+### F6 — P3 (informational, out of R3 scope): `auto` still compares two fakes
+R3 removes the *tautology*, not the *simulation*. `FakeCuda` vs `FakeAscend` diverge by construction, so `max_absolute_difference > 0` and the report is no longer self-referential — but `passed: True` on this path is still evidence about two fixtures, not about CUDA vs Ascend hardware. `validation_level: "simulated"` is present and asserted, which is the right mitigation. Flagging only so that "R3 closed the false-pass issue" is not later read as "the `auto` path validates real equivalence."
 
-### F5 — P3: Vestigial field / undocumented contract break
-`target` now has exactly one legal value equal to its default, so it is inert. Clients previously sending `target="cuda"` break with no deprecation window, changelog entry, or version bump visible in this diff. Either document the removal in the API changelog/OpenAPI description (the field description does explain it — extend that to release notes) or drop the field.
+### F7 — P3: Check for now-unused test imports
+The preview test's polling loop (`time.sleep`, `pytest.fail`) was deleted. If no other test in the file uses `time`, ruff `F401` will flag the module-level `import time`. The truncated view suggests other preview tests still poll, so this is likely fine — a lint run confirms.
 
 ---
 
-## Bottom line
-Criteria 1, 2, 3, 6 pass cleanly and the removal is done the right way — deleted code path, deleted false-pass assertions, layered rejection. Promote to unconditional PASS once **F1** (no self-comparison construction anywhere outside the API) and **F2** (the surviving `auto` comparison is demonstrably capable of failing) are closed. F3–F5 are polish and need not block.
+## Verdict: **PASS**
+
+All six audit criteria are met. The tautological self-comparison is removed at the only two entry points in evidence, the replacement behaviour fails closed with 422 rather than degrading to a weaker pass, the old false-pass assertions are rewritten in place rather than duplicated, and — the strongest part of this change — `test_port_auto` now asserts *divergence* on the surviving path, so the fix cannot be silently reverted by pointing `auto` at a single backend.
+
+No P1 findings. Merge is not blocked. Before closing R3, land the two P2 follow-ups: (F1) grep-and-confirm no non-HTTP caller constructs `EquivalenceRunner` with the same backend twice, plus a full-suite green run; and (F2) replace the background-reachable `HTTPException` with a domain exception translated at the router edge, and confirm a pre-R3 persisted `target="cuda"` job lands in `status="error"` rather than hanging.
