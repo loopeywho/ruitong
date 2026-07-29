@@ -50,13 +50,36 @@ def _make_runner(
             )
         cuda_is_fake = isinstance(cuda, (FakeCuda, FakeAscend))
         ascend_is_fake = isinstance(ascend, (FakeCuda, FakeAscend))
-        validation_level = "simulated" if (cuda_is_fake or ascend_is_fake) else "live"
+        # "production" — NOT "live". The response model constrains this to
+        # Literal["simulated","staging","production"], so emitting "live" is a
+        # pydantic ValidationError raised in exactly the case R7 exists for:
+        # both backends real. The test suite never caught it because every
+        # test uses fakes, which take the "simulated" branch.
+        validation_level = (
+            "simulated" if (cuda_is_fake or ascend_is_fake) else "production"
+        )
         return EquivalenceRunner(cuda, ascend), validation_level, "cuda", "ascend"
     else:
         raise HTTPException(
             status_code=422,
             detail=f"target='{target}' is not allowed. Only 'auto' (cross-backend comparison) is supported. Single-target self-comparison was removed (R3).",
         )
+
+
+def _registry(request: Request) -> BackendRegistry:
+    """Return the backend registry, or refuse with 503.
+
+    `app.state.router` is set by `lifespan`; a bare access raises KeyError and
+    surfaces as an opaque 500. Matches the codebase convention of
+    `getattr(..., None)` + an explicit "not initialised" 503.
+    """
+    router = getattr(request.app.state, "router", None)
+    if router is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Backend registry not initialised — server may still be starting",
+        )
+    return router.registry
 
 
 def _principal(request: Request) -> str:
@@ -151,7 +174,7 @@ async def run_port(req: PortRequest, request: Request) -> PortReport:
 
     Deprecated: prefer POST /v1/port/preview (async with job polling).
     """
-    registry: BackendRegistry = request.app.state.router.registry
+    registry: BackendRegistry = _registry(request)
     runner, validation_level, _, _ = _make_runner(registry, req.model, req.target)
     prompts = req.prompts if req.prompts is not None else _default_prompts(req.model)
     report: EquivalenceReport = await runner.run(req.model, prompts)
@@ -200,7 +223,7 @@ async def submit_port_job(req: PortRequest, request: Request) -> JobInfo:
     import asyncio
 
     # Capture registry reference for the background task (R7)
-    registry: BackendRegistry = request.app.state.router.registry
+    registry: BackendRegistry = _registry(request)
 
     async def _run_job() -> None:
         try:

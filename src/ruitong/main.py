@@ -7,7 +7,7 @@ import hmac
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from .api.router import router as port_router
@@ -103,9 +103,21 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/v1/models")
-async def models() -> dict[str, list[str]]:
-    """List available models from the registry (R7 — uses registered backends)."""
-    router: Router = app.state.router
+async def models(request: Request) -> dict[str, list[str]]:
+    """List available models from the registry (R7 — uses registered backends).
+
+    Reads from `request.app.state`, not the module-global `app`, and guards the
+    lookup: `app.state.router` only exists after `lifespan` has run, so a bare
+    attribute access raises `KeyError` -> opaque 500. Every other state lookup
+    in this codebase uses `getattr(..., None)` with an explicit 503; this now
+    matches (see `auth/router.py::_get_key_store`).
+    """
+    router: Router | None = getattr(request.app.state, "router", None)
+    if router is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Backend registry not initialised — server may still be starting",
+        )
     models_list = await router.registry.list_models()
     return {"models": sorted({m.id for m in models_list})}
 

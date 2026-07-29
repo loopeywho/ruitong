@@ -85,3 +85,103 @@ class TestRegistryIntegration:
             # return "live" because neither is a fake.
             # We can't test the full flow without a running mock server,
             # but the registry configuration is correct.
+
+
+class TestValidationLevelIsSchemaValid:
+    """`validation_level` must be a value the response model accepts.
+
+    R7 derived it from what actually ran — correct intent — but emitted
+    "live", which is not in Literal["simulated","staging","production"].
+    That is a pydantic ValidationError in exactly the case R7 exists for:
+    both backends real. Every existing test uses fakes, which take the
+    "simulated" branch, so the suite passed while the production path was
+    broken.
+
+    These call `_make_runner` for real, so they fail if the emitted value
+    regresses. An earlier version of this test hardcoded the expected set and
+    was therefore vacuous — it passed against the broken code.
+    """
+
+    def _level_for(self, backend_a, backend_b) -> str:
+        """Drive the REAL _make_runner and return what it actually emits."""
+        from ruitong.api.router import _make_runner
+        from ruitong.registry import BackendRegistry
+        from ruitong.config import BridgeConfig
+
+        registry = BackendRegistry(BridgeConfig.from_env())
+        registry.register("cuda", backend_a)
+        registry.register("ascend", backend_b)
+        _, validation_level, _, _ = _make_runner(registry, "m", "auto")
+        return validation_level
+
+    def test_real_backends_emit_a_schema_valid_level(self) -> None:
+        import typing
+        from ruitong.api import PortReport
+        from ruitong.backends.vllm_http import VllmHttpBackend
+
+        level = self._level_for(
+            VllmHttpBackend(name="cuda", base_url="http://a:8000"),
+            VllmHttpBackend(name="ascend", base_url="http://b:8000"),
+        )
+        allowed = set(
+            typing.get_args(PortReport.model_fields["validation_level"].annotation)
+        )
+        assert level in allowed, (
+            f"_make_runner emits {level!r} for two real backends, which the "
+            f"response model rejects (allowed: {sorted(allowed)}) — a 500 on "
+            f"the exact path R7 was built for"
+        )
+        # And the report must actually construct with it.
+        PortReport(
+            model="m", mode="logprob", total_prompts=0, passed=False,
+            validation_level=level,
+            metrics=[], per_prompt=[], warnings=[], thresholds={},
+        )
+
+    def test_fake_backends_still_report_simulated(self) -> None:
+        """The honesty guarantee (D5): fakes must never be labelled otherwise."""
+        from ruitong.backends.fake import FakeAscend, FakeCuda
+
+        level = self._level_for(
+            FakeCuda(accept_any=True), FakeAscend(accept_any=True)
+        )
+        assert level == "simulated"
+
+
+class TestRegistryLookupFailsClosed:
+    """`app.state.router` exists only after lifespan runs.
+
+    A bare attribute access raises KeyError and surfaces as an opaque 500.
+    Every other state lookup in this codebase uses getattr(..., None) with an
+    explicit 503. These build an app WITHOUT lifespan — the condition a
+    normal TestClient hides — so they fail if that guard is removed.
+    """
+
+    def _app_without_lifespan(self):
+        from fastapi import FastAPI
+        from ruitong.api.router import router as port_router
+        from ruitong.main import models as models_endpoint
+
+        app = FastAPI()
+        app.include_router(port_router)
+        app.add_api_route("/v1/models", models_endpoint, methods=["GET"])
+        return app
+
+    def test_models_returns_503_not_500(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(self._app_without_lifespan(), raise_server_exceptions=False)
+        resp = client.get("/v1/models")
+        assert resp.status_code == 503, (
+            f"expected a clear 503, got {resp.status_code} — a bare "
+            f"app.state.router access yields an opaque KeyError/500"
+        )
+
+    def test_port_returns_503_not_500(self) -> None:
+        from fastapi.testclient import TestClient
+
+        client = TestClient(self._app_without_lifespan(), raise_server_exceptions=False)
+        resp = client.post("/v1/port", json={"model": "m", "target": "auto"})
+        assert resp.status_code == 503, (
+            f"expected a clear 503, got {resp.status_code}"
+        )
