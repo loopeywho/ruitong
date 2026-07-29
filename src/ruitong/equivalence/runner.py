@@ -204,6 +204,12 @@ class EquivalenceRunner:
     """
 
     def __init__(self, backend_a: Backend, backend_b: Backend) -> None:
+        if backend_a is backend_b:
+            raise ValueError(
+                f"R3: self-comparison is always a false pass. "
+                f"backend_a is backend_b ({backend_a}). "
+                f"Pass two distinct backends to compare."
+            )
         self.backend_a = backend_a
         self.backend_b = backend_b
 

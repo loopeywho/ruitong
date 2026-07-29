@@ -20,7 +20,7 @@ class TestPortEndpoint:
     """POST /v1/port — equivalence comparison via REST."""
 
     def test_port_auto(self, client: TestClient) -> None:
-        """Default auto mode compares CUDA vs Ascend."""
+        """Default auto mode compares CUDA vs Ascend (non-tautological, R3)."""
         resp = client.post("/v1/port", json={"model": "Qwen3-8B"})
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -30,6 +30,18 @@ class TestPortEndpoint:
         assert data["validation_level"] == "simulated"
         assert "cosine_similarity" in {m["name"] for m in data["metrics"]}
         assert len(data["per_prompt"]) == 3
+        # R3 F2: prove the auto path is NOT a disguised self-comparison
+        metrics_by_name = {m["name"]: m["value"] for m in data["metrics"]}
+        mad = metrics_by_name.get("max_absolute_difference", 0.0)
+        assert mad > 0.0, (
+            f"auto path produced max_absolute_difference={mad} — "
+            "FakeCuda vs FakeAscend should diverge"
+        )
+        cs = metrics_by_name.get("cosine_similarity", 1.0)
+        assert cs < 1.0, (
+            f"auto path produced cosine_similarity={cs} — "
+            "FakeCuda vs FakeAscend should diverge"
+        )
 
     def test_port_cuda_single(self, client: TestClient) -> None:
         """Single-target 'cuda' is rejected with 422 (false-pass prevention, R3)."""
