@@ -1,4 +1,4 @@
-# Handoff — Claude → Kimi (RedStar) · updated 2026-07-28 ~20:25, HEAD `9a8bc4c`
+# Handoff — Claude → Kimi (RedStar) · updated 2026-07-31 ~15:20, HEAD `464aa8c`
 
 **Division of labour (Boss):** Claude audits and sets direction. Kimi builds (primary coder on
 RedStar since 2026-07-28). Kimi's edge is what sits behind the firewall — Chinese-language CANN
@@ -7,7 +7,25 @@ anything needing those to Kimi.
 
 ---
 
-## 🔴 READ THIS FIRST — the gate changed AGAIN (D12), and it affects R1
+## 🔴 READ THIS FIRST (2026-07-31) — `compare_corpora.py` was gating on a retired metric
+
+**Third real cross-hardware data point captured: A40 vs H100 (`corpora/h100.json`,
+`reports/cross_hardware_a40_vs_h100.txt`).** It printed `VERDICT: FAIL`, but the only failing
+line was `top5_set_agreement` at 0.916666667 — the *exact* same number D10/D11 got on A40-vs-Ada,
+which D12 (below) already documented as expected-and-not-gated. The tool's `Thresholds` class
+had been updated for D12; `tools/compare_corpora.py`'s own gate list had not. Fixed in `464aa8c`
+(moved `top5_set_agreement` to reported-only, matching `runner.py`). Re-run: `VERDICT: PASS`.
+305/305 tests still pass — nothing asserted the old gate list, which is itself worth noting next
+time you add a metric: **add a `TestRunnerGateIntegration`-style test that would fail if a tool
+script drifts from `Thresholds`, not just one that checks `runner.py` in isolation.**
+
+RunPod status while we're at it: the old pod (`vjqkdwuzls8hnf`) is gone — fully terminated, not
+"stopped" as previously assumed; check pod existence by ID before assuming a stopped pod is still
+there. MI300X: still zero stock. A40/H100 both available on demand now if you need more corpus.
+
+---
+
+## READ THIS SECOND — the gate changed AGAIN (D12), and it affects R1
 
 **If you are mid-write on `RESEARCH_ASCEND_LOGPROBS.md`: stop and read this section before
 finishing your severity analysis.** I can see it uncommitted at 252 lines. Your conclusions about
