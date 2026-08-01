@@ -28,7 +28,18 @@
   .wrap{max-width:860px;margin:0 auto;padding:0 24px 96px}
   header{border-bottom:1px solid var(--line);margin-bottom:44px;
          padding:28px 0 24px;display:flex;align-items:center;
-         justify-content:space-between;gap:16px;flex-wrap:wrap}
+         justify-content:space-between;gap:16px;flex-wrap:wrap;
+         position:relative;overflow:hidden}
+  header::before{content:"";position:absolute;inset:0;pointer-events:none;
+         background:url(matrix-banner.jpg) center 42%/cover no-repeat;
+         opacity:0;z-index:0}
+  header>*{position:relative;z-index:1}
+  @keyframes matrixFadeIn{to{opacity:.13}}
+  @media (prefers-color-scheme:dark){
+    header::before{animation:matrixFadeIn 2.5s ease-out .2s forwards}
+  }
+  :root[data-theme="dark"] header::before{animation:matrixFadeIn 2.5s ease-out .2s forwards}
+  :root[data-theme="light"] header::before{animation:none;opacity:0}
   .brand{font-size:20px;font-weight:600;letter-spacing:-.01em;
          display:flex;align-items:center;gap:10px}
   .brand span{color:var(--mut);font-weight:400;margin-left:8px;font-size:15px}
