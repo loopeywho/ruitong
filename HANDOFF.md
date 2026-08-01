@@ -1,4 +1,4 @@
-# Handoff — Claude → Kimi (RedStar) · updated 2026-07-31 ~15:20, HEAD `464aa8c`
+# Handoff — Claude → Kimi (RedStar) · updated 2026-08-01 ~02:35, HEAD `13473ff`
 
 **Division of labour (Boss):** Claude audits and sets direction. Kimi builds (primary coder on
 RedStar since 2026-07-28). Kimi's edge is what sits behind the firewall — Chinese-language CANN
@@ -7,7 +7,28 @@ anything needing those to Kimi.
 
 ---
 
-## 🔴 READ THIS FIRST (2026-07-31) — `compare_corpora.py` was gating on a retired metric
+## 🔴 READ THIS FIRST (2026-08-01) — first real cross-vendor data point: NVIDIA A40 vs AMD MI300X
+
+**The actual product thesis, measured for the first time.** `corpora/mi300x.json` (61 prompts,
+61/61 bit-exact on its own warm repeat — MI300X is deterministic-when-warm same as the NVIDIA
+cards). Compared against the 61-prompt A40 reference: 43/61 identical text (70.5%), worst
+token-matched Δprob 0.152 (well inside the 0.4402 gate), top-1 agreement 1.000. **VERDICT: PASS.**
+Full report: `reports/cross_vendor_a40_vs_mi300x_61prompt.txt`.
+
+Interesting, not yet a claim: the 29.5% divergence rate is in the same range as both same-vendor
+NVIDIA pairs this week (A40-vs-Ada 26%, A40-vs-H100 25%). One data point, one model — no error
+bars across pairs — but worth keeping in mind before assuming cross-vendor is categorically worse.
+
+**Took two failed attempts (~$2.40 wasted) to get here — `tools/grab_mi300x.sh` had two real
+bugs, both now fixed (`dffef0b`, `fd65ee4`):** (1) no `dockerStartCmd` — vLLM never bound port
+8000 in 30 min on env-vars alone; (2) even with the args fixed, still nothing — turned out
+`rocm/vllm` (AMD's own image) is **deprecated**, found by reading vLLM's own docs instead of
+guessing a third time. Current image: `vllm/vllm-openai-rocm:latest`. If you touch this script
+again and it stops working, check whether that tag has moved before re-guessing docker flags.
+
+---
+
+## READ THIS SECOND (2026-07-31) — `compare_corpora.py` was gating on a retired metric
 
 **Third real cross-hardware data point captured: A40 vs H100 (`corpora/h100.json`,
 `reports/cross_hardware_a40_vs_h100.txt`).** It printed `VERDICT: FAIL`, but the only failing
@@ -25,7 +46,7 @@ there. MI300X: still zero stock. A40/H100 both available on demand now if you ne
 
 ---
 
-## READ THIS SECOND — the gate changed AGAIN (D12), and it affects R1
+## READ THIS THIRD — the gate changed AGAIN (D12), and it affects R1
 
 **If you are mid-write on `RESEARCH_ASCEND_LOGPROBS.md`: stop and read this section before
 finishing your severity analysis.** I can see it uncommitted at 252 lines. Your conclusions about
