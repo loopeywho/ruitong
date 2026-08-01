@@ -310,13 +310,44 @@
   set — treat 25% as a rougher estimate than the Ada figure&rsquo;s already-wide confidence
   interval, not a tighter one.</p>
 
+  <h2>The first real cross-vendor measurement</h2>
+
+  <p>NVIDIA A40 against AMD MI300X — the actual question this project exists to answer, not
+  another same-vendor pair. Same <code>Qwen3-8B</code>, same seed, one side CUDA, the other ROCm,
+  61 prompts.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Measure</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Identical output text</td><td class="num">43 / 61 prompts</td></tr>
+      <tr><td>Different output text</td><td class="num">18 / 61 prompts (29.5%)</td></tr>
+      <tr><td>Top-1 token agreement (before divergence)</td><td class="num">1.000</td></tr>
+      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.152</td></tr>
+      <tr><td>Probability-mass delta</td><td class="num">0.0000324</td></tr>
+      <tr><td><strong>Gate verdict</strong></td><td class="pass"><strong>PASS — equivalent within calibrated tolerance</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>The gate holds across vendors, not just across cards from the same one.</strong> And
+  the divergence rate (29.5%) isn&rsquo;t dramatically different from the two same-vendor NVIDIA
+  pairs measured this same week (26% and 25% above) — on this one model and prompt set, moving to
+  an entirely different silicon vendor didn&rsquo;t blow the noise budget open the way you might
+  expect.</p>
+
+  <p class="mut">One data point: one model, one prompt set, one MI300X unit. We are not claiming
+  this generalizes — that is exactly why this project exists, to keep measuring rather than
+  assume. Ascend (CANN) is still queued.</p>
+
   <h2>The accuracy delta table</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>Cross-vendor runs still pending.</strong> We will not publish numbers we have
-    not measured. The single-GPU baseline is now measured and shown below; the cross-vendor and
-    Ascend rows are not, and are marked accordingly. Results and raw JSON land here as each
-    completes.</p>
+    <p style="margin:0"><strong>Ascend still queued; MI300X is the first cross-vendor row measured.</strong> We will
+    not publish numbers we have not measured. The single-GPU baseline, both same-vendor pairs, and
+    the first cross-vendor pair (A40 vs MI300X, above) are now measured and shown below; the
+    Ascend and remaining A100-referenced rows are not, and are marked accordingly. Results and raw
+    JSON land here as each completes.</p>
   </div>
 
   <div class="scroll">
@@ -326,6 +357,7 @@
       <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>A40 bf16, warm</td><td>Is the reference itself reproducible?</td><td class="pass">done — bit-exact, 16/16</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16, cold</td><td>A40 bf16, warm</td><td>Does cache state move it?</td><td class="pass">done — 0.087, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>H100 bf16, warm</td><td>Second same-vendor pair — does the gate hold on new silicon?</td><td class="pass">done — PASS, see above</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>MI300X bf16, warm</td><td>First real cross-vendor pair — does the gate hold across silicon vendors?</td><td class="pass">done — PASS, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the cross-precision noise floor?</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
@@ -540,10 +572,32 @@
 
   <p class="mut">局限：本次实测使用的是最初的 16 条提示词语料，而非扩充后的 61 条——25% 应被视为比 Ada 那组本已较宽的置信区间更粗略的估计，而非更精确。</p>
 
+  <h2>第一次真实跨厂商实测</h2>
+
+  <p>NVIDIA A40 对比 AMD MI300X——这才是本项目真正要回答的问题，而非又一组同厂商配对。同一 <code>Qwen3-8B</code>、同一随机种子，一端 CUDA，一端 ROCm，61 条提示词。</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>指标</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>输出文本完全一致</td><td class="num">43 / 61 条</td></tr>
+      <tr><td>输出文本不同</td><td class="num">18 / 61 条（29.5%）</td></tr>
+      <tr><td>Top-1 token 一致率（分叉之前）</td><td class="num">1.000</td></tr>
+      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.152</td></tr>
+      <tr><td>概率质量偏差</td><td class="num">0.0000324</td></tr>
+      <tr><td><strong>门限判定</strong></td><td class="pass"><strong>通过——在校准容差内等价</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>门限不仅在同厂商配对上成立，跨厂商同样成立。</strong>而且分叉率（29.5%）与本周测得的两组同厂商 NVIDIA 配对（26% 与 25%，见上文）并无显著差异——就这一个模型、一组提示词而言，换成完全不同的芯片厂商，并未像预期那样把噪声大幅推高。</p>
+
+  <p class="mut">仅为单一数据点：单一模型、单一提示词集、单一 MI300X 实例。我们不会据此断言可推广——这正是本项目持续实测、而非想当然的原因所在。昇腾（CANN）仍在排期中。</p>
+
   <h2>精度差异表</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>跨厂商测试仍在排期。</strong>我们不会发布没有实测过的数字。单卡基线现已实测，列于下表；跨厂商与昇腾两行尚未完成，已如实标注。每完成一项，结果与原始 JSON 将在此更新。</p>
+    <p style="margin:0"><strong>昇腾仍在排期；MI300X 是首个已实测的跨厂商行。</strong>我们不会发布没有实测过的数字。单卡基线、两组同厂商配对、以及首组跨厂商配对（A40 对 MI300X，见上文）现已实测，列于下表；昇腾与其余以 A100 为参考的各行尚未完成，已如实标注。每完成一项，结果与原始 JSON 将在此更新。</p>
   </div>
 
   <div class="scroll">
@@ -553,6 +607,7 @@
       <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>A40 bf16，已预热</td><td>参考端自身是否可复现？</td><td class="pass">已完成——逐比特一致，16/16</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16，冷启动</td><td>A40 bf16，已预热</td><td>缓存状态是否影响结果？</td><td class="pass">已完成——0.087，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>H100 bf16，已预热</td><td>第二组同厂商配对——门限在新芯片上是否依然成立？</td><td class="pass">已完成——通过，见上文</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>MI300X bf16，已预热</td><td>首个真实跨厂商配对——门限跨芯片厂商是否依然成立？</td><td class="pass">已完成——通过，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>跨精度噪声基线是多少？</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>跨厂商、同精度</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>仅 batch 变化会影响吗？</td><td class="mut">排期中</td></tr>
