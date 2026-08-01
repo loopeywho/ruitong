@@ -374,14 +374,44 @@
   this generalizes — that is exactly why this project exists, to keep measuring rather than
   assume. Ascend (CANN) is still queued.</p>
 
+  <h2>The precision floor</h2>
+
+  <p>NVIDIA A100 running the same <code>Qwen3-8B</code> twice — once served in fp16, once in
+  bf16. Same GPU, same weights, no hardware change at all. Only the serving dtype differs. This
+  answers a different question than the vendor pairs above: how much of the divergence you have
+  been seeing is just precision, before any silicon changes?</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Measure</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Identical output text</td><td class="num">43 / 61 prompts</td></tr>
+      <tr><td>Different output text</td><td class="num">18 / 61 prompts (29.5%)</td></tr>
+      <tr><td>Top-1 token agreement (before divergence)</td><td class="num">1.000</td></tr>
+      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.0825</td></tr>
+      <tr><td>Probability-mass delta</td><td class="num">0.0000329</td></tr>
+      <tr><td><strong>Gate verdict</strong></td><td class="pass"><strong>PASS — equivalent within calibrated tolerance</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>Precision alone produces about as much divergence as changing vendors entirely.</strong>
+  The divergence rate (29.5%) lands exactly on the A40-vs-MI300X cross-vendor figure above, and in
+  the same band as both same-vendor NVIDIA pairs (26%, 25%). The worst token-matched Δprob (0.0825)
+  sits comfortably inside the 0.4402 gate ceiling.</p>
+
+  <p class="mut">One data point: one model, one prompt set, one A100 unit. The fp16/bf16 split is
+  not a hardware variable, which is exactly why it belongs next to the vendor pairs — it is the
+  floor those numbers should be read against.</p>
+
   <h2>The accuracy delta table</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>Ascend still queued; MI300X is the first cross-vendor row measured.</strong> We will
-    not publish numbers we have not measured. The single-GPU baseline, both same-vendor pairs, and
-    the first cross-vendor pair (A40 vs MI300X, above) are now measured and shown below; the
-    Ascend and remaining A100-referenced rows are not, and are marked accordingly. Results and raw
-    JSON land here as each completes.</p>
+    <p style="margin:0"><strong>Ascend still queued; MI300X and the precision floor are the rows measured so far.</strong> We will
+    not publish numbers we have not measured. The single-GPU baseline, both same-vendor pairs, the
+    first cross-vendor pair (A40 vs MI300X), and the fp16/bf16 precision floor (all above) are now
+    measured and shown below; Ascend and the remaining A100-referenced rows are not, and are
+    marked accordingly. Results and raw JSON land here as each completes.</p>
   </div>
 
   <div class="scroll">
@@ -392,7 +422,7 @@
       <tr><td>Qwen3-8B</td><td>A40 bf16, cold</td><td>A40 bf16, warm</td><td>Does cache state move it?</td><td class="pass">done — 0.087, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>H100 bf16, warm</td><td>Second same-vendor pair — does the gate hold on new silicon?</td><td class="pass">done — PASS, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>MI300X bf16, warm</td><td>First real cross-vendor pair — does the gate hold across silicon vendors?</td><td class="pass">done — PASS, see above</td></tr>
-      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the cross-precision noise floor?</td><td class="mut">queued</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the cross-precision noise floor?</td><td class="pass">done — PASS, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
       <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Model-dependence</td><td class="mut">queued</td></tr>
@@ -674,10 +704,32 @@
 
   <p class="mut">仅为单一数据点：单一模型、单一提示词集、单一 MI300X 实例。我们不会据此断言可推广——这正是本项目持续实测、而非想当然的原因所在。昇腾（CANN）仍在排期中。</p>
 
+  <h2>精度基线</h2>
+
+  <p>同一块 NVIDIA A100，同一个 <code>Qwen3-8B</code>，跑两次——一次以 fp16 提供服务，一次以 bf16。同一块 GPU、同一份权重，硬件完全没有变化，唯一变量是服务精度。这回答了与上面厂商配对不同的问题：在任何芯片变化发生之前，你看到的分叉里有多少只是精度造成的？</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>指标</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>输出文本完全一致</td><td class="num">43 / 61 条</td></tr>
+      <tr><td>输出文本不同</td><td class="num">18 / 61 条（29.5%）</td></tr>
+      <tr><td>Top-1 token 一致率（分叉之前）</td><td class="num">1.000</td></tr>
+      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.0825</td></tr>
+      <tr><td>概率质量偏差</td><td class="num">0.0000329</td></tr>
+      <tr><td><strong>门限判定</strong></td><td class="pass"><strong>通过——在校准容差内等价</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>仅精度差异产生的分叉，与更换厂商产生的分叉幅度相当。</strong>分叉率（29.5%）与上文 A40 对 MI300X 的跨厂商数字完全一致，也落在两组同厂商 NVIDIA 配对（26%、25%）的同一区间内。最大 token 对齐 Δ概率（0.0825）仍明显低于 0.4402 的门限上限。</p>
+
+  <p class="mut">仅为单一数据点：单一模型、单一提示词集、单一 A100 实例。fp16/bf16 之分并非硬件变量，这正是它应当与厂商配对数字并列的原因——它是解读那些数字时应参照的基线。</p>
+
   <h2>精度差异表</h2>
 
   <div class="callout pending">
-    <p style="margin:0"><strong>昇腾仍在排期；MI300X 是首个已实测的跨厂商行。</strong>我们不会发布没有实测过的数字。单卡基线、两组同厂商配对、以及首组跨厂商配对（A40 对 MI300X，见上文）现已实测，列于下表；昇腾与其余以 A100 为参考的各行尚未完成，已如实标注。每完成一项，结果与原始 JSON 将在此更新。</p>
+    <p style="margin:0"><strong>昇腾仍在排期；目前已实测的是 MI300X 与精度基线两行。</strong>我们不会发布没有实测过的数字。单卡基线、两组同厂商配对、首组跨厂商配对（A40 对 MI300X）、以及 fp16/bf16 精度基线（均见上文）现已实测，列于下表；昇腾与其余以 A100 为参考的各行尚未完成，已如实标注。每完成一项，结果与原始 JSON 将在此更新。</p>
   </div>
 
   <div class="scroll">
@@ -688,7 +740,7 @@
       <tr><td>Qwen3-8B</td><td>A40 bf16，冷启动</td><td>A40 bf16，已预热</td><td>缓存状态是否影响结果？</td><td class="pass">已完成——0.087，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>H100 bf16，已预热</td><td>第二组同厂商配对——门限在新芯片上是否依然成立？</td><td class="pass">已完成——通过，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>MI300X bf16，已预热</td><td>首个真实跨厂商配对——门限跨芯片厂商是否依然成立？</td><td class="pass">已完成——通过，见上文</td></tr>
-      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>跨精度噪声基线是多少？</td><td class="mut">排期中</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>跨精度噪声基线是多少？</td><td class="pass">已完成——通过，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>跨厂商、同精度</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>仅 batch 变化会影响吗？</td><td class="mut">排期中</td></tr>
       <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>是否与模型相关</td><td class="mut">排期中</td></tr>
@@ -908,13 +960,37 @@
   <code>&#39; like&#39;</code> с другой. Мы сопоставляем токены по идентичности и сравниваем
   вероятности, а не логарифмы.</p>
 
+  <h2>Порог точности (fp16 против bf16)</h2>
+
+  <p>Один и тот же NVIDIA A100 и одна и та же модель <code>Qwen3-8B</code> — прогон в fp16 и
+  прогон в bf16. Кристалл один и тот же, веса одни и те же, меняется только точность вывода. Это
+  показывает, сколько «шума» даёт одна лишь точность, ещё до смены железа.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Показатель</th><th>Результат</th></tr></thead>
+    <tbody>
+      <tr><td>Текст ответа полностью совпал</td><td class="num">43 / 61 запрос</td></tr>
+      <tr><td>Текст ответа различался</td><td class="num">18 / 61 (29.5%)</td></tr>
+      <tr><td>Совпадение top-1 токена (до расхождения)</td><td class="num">1.000</td></tr>
+      <tr><td>Макс. Δвероятности по совпадающим токенам</td><td class="num">0.0825</td></tr>
+      <tr><td>Отклонение вероятностной массы</td><td class="num">0.0000329</td></tr>
+      <tr><td><strong>Вердикт</strong></td><td class="pass"><strong>пройдено — в пределах откалиброванного допуска</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="mut">Одна лишь точность даёт расхождение (29.5%) в том же диапазоне, что и смена
+  производителя (26% выше). Это не аппаратная переменная — именно поэтому её стоит читать рядом с
+  межвендорными парами, как базовый уровень для их интерпретации.</p>
+
   <h2>Что мы ещё не измерили</h2>
 
   <div class="callout pending">
     <p style="margin:0"><strong>Мы не публикуем числа, которые не измерили.</strong> Базовая
-    линия на одном производителе измерена и приведена выше. Кросс-вендорные строки и строка
-    Ascend — нет, и они отмечены как таковые. Результаты и исходный JSON появляются здесь по мере
-    готовности.</p>
+    линия на одном производителе и порог точности fp16/bf16 измерены и приведены выше.
+    Кросс-вендорные строки и строка Ascend — нет, и они отмечены как таковые. Результаты и
+    исходный JSON появляются здесь по мере готовности.</p>
   </div>
 
   <div class="scroll">
@@ -922,6 +998,7 @@
     <thead><tr><th>Модель</th><th>Эталон</th><th>Проверяемый</th><th>Статус</th></tr></thead>
     <tbody>
       <tr><td>Qwen3-8B</td><td>A40 bf16, прогрет</td><td>RTX 6000 Ada bf16</td><td class="pass">готово — 26%</td></tr>
+      <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td class="pass">готово — пройдено, см. выше</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td class="mut">в очереди</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>Ascend 910B</td><td class="mut">v3</td></tr>
     </tbody>
