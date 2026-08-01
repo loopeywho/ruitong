@@ -1,0 +1,34 @@
+=== Ruitong Equivalence Report (corpus comparison) ===
+Model:      Qwen/Qwen3-8B
+Reference:  cuda-a40-qwen3-8b-v3
+Candidate:  rocm-mi300x-qwen3-8b
+Prompts:    16 compared
+Identical output text: 11/16
+Diverged token stream: 5/16
+Metrics below are computed only over positions BEFORE any divergence — past that point the two backends are continuing different sentences.
+
+Token-matched prob diff [GATE]:  0.108363731  <= 0.4402     PASS
+Prob-mass delta         [GATE]:  0.000022447  <= 0.01       PASS
+Top-1 agreement         [GATE]:  1.000000000  >= 0.99       PASS
+Top-5 set agreement     (reported):  0.916666667  >= 0.95       below (expected, not gated)
+Top-k max abs diff      (reported):     1.250000
+
+VERDICT: PASS — equivalent within calibrated tolerance
+
+Per prompt (worst first):
+  Δp=0.108363731  cmp= 16  DIVERGED@16    | In one sentence, what is photosynthesis?
+  Δp=0.086766855  cmp= 64  same-text      | Explain what a transformer model is, brief
+  Δp=0.062171607  cmp= 26  same-text      | Write a haiku about rain.
+  Δp=0.062145823  cmp= 41  DIVERGED@41    | What is the difference between a list and 
+  Δp=0.060822919  cmp= 24  same-text      | 用一句话解释什么是机器学习。
+  Δp=0.060282832  cmp= 64  same-text      | What is 17 multiplied by 23?
+  Δp=0.060094415  cmp= 64  same-text      | What does the acronym GPU stand for?
+  Δp=0.054901055  cmp= 35  same-text      | Name three primary colours.
+  Δp=0.037416657  cmp= 44  same-text      | Explain recursion to a beginner in two sen
+  Δp=0.035503297  cmp= 53  DIVERGED@53    | Summarise the water cycle in two sentences
+  Δp=0.019109763  cmp= 56  DIVERGED@56    | What year did the Apollo 11 mission land o
+  Δp=0.015131949  cmp=  4  same-text      | Translate 'good morning' into Mandarin Chi
+  Δp=0.011224328  cmp= 25  same-text      | List the first five prime numbers.
+  Δp=0.000024086  cmp= 11  same-text      | Give the chemical symbol for gold.
+  Δp=0.000000028  cmp=  8  same-text      | What is the capital of France? Answer in o
+  Δp=   n/a       cmp=  0  DIVERGED@0     | Write one line of Python that reverses a s
