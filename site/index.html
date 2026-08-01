@@ -25,6 +25,15 @@
        font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",
             "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
        -webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+       background:url(matrix-watermark-tile.png) repeat;opacity:0}
+  .wrap{position:relative;z-index:1}
+  @keyframes watermarkFadeIn{to{opacity:1}}
+  @media (prefers-color-scheme:dark){
+    body::before{animation:watermarkFadeIn 3s ease-out .3s forwards}
+  }
+  :root[data-theme="dark"] body::before{animation:watermarkFadeIn 3s ease-out .3s forwards}
+  :root[data-theme="light"] body::before{animation:none;opacity:0}
   .wrap{max-width:860px;margin:0 auto;padding:0 24px 96px}
   header{border-bottom:1px solid var(--line);margin-bottom:44px;
          padding:28px 0 24px;display:flex;align-items:center;
