@@ -160,8 +160,10 @@
   </div>
 
   <p class="mut">Those fault magnitudes are measured against a <em>simulated</em> correct port —
-  bfloat16 rounding applied to the A40&rsquo;s own output. We then tested that simulation against
-  two real GPUs, and it did not survive. See below.</p>
+  bfloat16 rounding applied to the A40&rsquo;s own output — and the Verdict column above reflects
+  the 2.2e-03 threshold calibrated from it. We then tested that simulation against two real GPUs,
+  and it did not survive: see below. Under the corrected 0.4402 threshold, ×1.01 is no longer
+  caught — a disclosed, permanent detection gap, not a regression.</p>
 
   <h2>The first real cross-hardware measurement</h2>
 
@@ -415,7 +417,9 @@
   </table>
   </div>
 
-  <p class="mut">上述故障幅度，是相对于一次<em>模拟</em>的正确迁移测得的——即对 A40 自身输出施加 bfloat16 舍入。我们随后用两块真实 GPU 检验了这个模拟，它没有通过。见下文。</p>
+  <p class="mut">上述故障幅度，是相对于一次<em>模拟</em>的正确迁移测得的——即对 A40 自身输出施加 bfloat16
+  舍入，上表"判定"一列反映的正是由此校准出的 2.2e-03 阈值。我们随后用两块真实 GPU 检验了这个模拟，它没有通过——见下文。在修正后的
+  0.4402 阈值下，×1.01 已不再被捕获——这是一个公开披露、长期存在的检测盲区，而非退化。</p>
 
   <h2>首次真实跨硬件实测</h2>
 
