@@ -28,11 +28,13 @@ POD_ID=""
 # is the same mistake that crash-looped two pods on 2026-07-28.
 #
 # ROCm needs a ROCm build of vLLM. Override with RUITONG_ROCM_IMAGE if this
-# tag moves. The correct dockerStartCmd for this image is UNVERIFIED: passing
-# args that the image's ENTRYPOINT does not expect is exactly how the earlier
-# pods crash-looped, so we pass none and let the image's own default run,
-# then check /health. If the image needs explicit args, the health timeout
-# below will catch it in <=30 min and tear down.
+# tag moves. dockerStartCmd IS required: a 2026-08-01 run that passed none
+# (env vars only — MODEL_NAME/VLLM_API_KEY) never bound port 8000 in 30 min
+# (uptime stuck at 0, /health 404 the whole time) and hit the timeout below.
+# Fixed to pass --model/--api-key explicitly on the command line, matching
+# the pattern proven to work on the NVIDIA image the same day (A40 vs H100
+# capture, ready in ~120s). vLLM's ROCm build shares the same CLI, so the
+# same flags apply.
 ROCM_IMAGE="${RUITONG_ROCM_IMAGE:-rocm/vllm:latest}"
 MODEL="${RUITONG_MODEL:-Qwen/Qwen3-8B}"
 
@@ -93,8 +95,8 @@ cat > /tmp/mi300x_pod.json <<JSON
 {"name":"ruitong-cand-mi300x","imageName":"$ROCM_IMAGE","gpuTypeIds":["$GPU_ID"],
  "gpuCount":1,"containerDiskInGb":20,"volumeInGb":60,"volumeMountPath":"/workspace",
  "ports":["8000/http"],
- "env":{"HF_HOME":"/workspace/.huggingface","VLLM_API_KEY":"$KEY",
-        "MODEL_NAME":"$MODEL","VLLM_USE_TRITON_FLASH_ATTN":"0"}}
+ "dockerStartCmd":["--model","$MODEL","--api-key","$KEY"],
+ "env":{"HF_HOME":"/workspace/.huggingface","VLLM_USE_TRITON_FLASH_ATTN":"0"}}
 JSON
 echo "  image=$ROCM_IMAGE  model=$MODEL"
 POD_ID=$(curl -s -m 60 -X POST -H "Authorization: Bearer $RUNPOD_API_KEY" \
