@@ -28,14 +28,20 @@ POD_ID=""
 # is the same mistake that crash-looped two pods on 2026-07-28.
 #
 # ROCm needs a ROCm build of vLLM. Override with RUITONG_ROCM_IMAGE if this
-# tag moves. dockerStartCmd IS required: a 2026-08-01 run that passed none
-# (env vars only — MODEL_NAME/VLLM_API_KEY) never bound port 8000 in 30 min
-# (uptime stuck at 0, /health 404 the whole time) and hit the timeout below.
-# Fixed to pass --model/--api-key explicitly on the command line, matching
-# the pattern proven to work on the NVIDIA image the same day (A40 vs H100
-# capture, ready in ~120s). vLLM's ROCm build shares the same CLI, so the
-# same flags apply.
-ROCM_IMAGE="${RUITONG_ROCM_IMAGE:-rocm/vllm:latest}"
+# tag moves.
+#
+# 2026-08-01, two failed attempts before finding the actual cause:
+#   1. dockerStartCmd was empty (env vars only — MODEL_NAME/VLLM_API_KEY).
+#      Never bound port 8000 in 30 min (uptime stuck at 0, /health 404 the
+#      whole time). Fixed to pass --model/--api-key explicitly, matching the
+#      pattern already proven on the NVIDIA image the same day (A40 vs H100,
+#      ready in ~120s each).
+#   2. Same result even with the args fixed. Checked vLLM's own docs instead
+#      of guessing again: `rocm/vllm` (AMD's image) is DEPRECATED — that was
+#      the actual cause both times, not the invocation. Current image is
+#      `vllm/vllm-openai-rocm:latest` (docs.vllm.ai/en/latest/deployment/docker),
+#      the direct ROCm counterpart of the NVIDIA image that already works.
+ROCM_IMAGE="${RUITONG_ROCM_IMAGE:-vllm/vllm-openai-rocm:latest}"
 MODEL="${RUITONG_MODEL:-Qwen/Qwen3-8B}"
 
 : "${RUNPOD_API_KEY:?set RUNPOD_API_KEY (source .env.runpod)}"
