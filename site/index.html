@@ -29,8 +29,10 @@
   header{border-bottom:1px solid var(--line);margin-bottom:44px;
          padding:28px 0 24px;display:flex;align-items:center;
          justify-content:space-between;gap:16px;flex-wrap:wrap}
-  .brand{font-size:20px;font-weight:600;letter-spacing:-.01em}
+  .brand{font-size:20px;font-weight:600;letter-spacing:-.01em;
+         display:flex;align-items:center;gap:10px}
   .brand span{color:var(--mut);font-weight:400;margin-left:8px;font-size:15px}
+  .brand .logo{height:28px;width:auto;flex:0 0 auto}
   .controls{display:flex;gap:8px}
   button{font:inherit;font-size:13px;padding:6px 13px;border:1px solid var(--line);
          background:var(--card);color:var(--fg);border-radius:6px;cursor:pointer}
@@ -99,7 +101,7 @@
 <div class="wrap">
 
 <header>
-  <div class="brand">瑞通 Ruitong<span>ruitong.io</span></div>
+  <div class="brand"><svg class="logo" viewBox="0 0 240 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g fill="currentColor"><rect x="11" y="41" width="9" height="6" rx="1"/><rect x="72" y="41" width="9" height="6" rx="1"/><rect x="27" y="25" width="6" height="9" rx="1"/><rect x="27" y="86" width="6" height="9" rx="1"/><rect x="11" y="57" width="9" height="6" rx="1"/><rect x="72" y="57" width="9" height="6" rx="1"/><rect x="43" y="25" width="6" height="9" rx="1"/><rect x="43" y="86" width="6" height="9" rx="1"/><rect x="11" y="73" width="9" height="6" rx="1"/><rect x="72" y="73" width="9" height="6" rx="1"/><rect x="59" y="25" width="6" height="9" rx="1"/><rect x="59" y="86" width="6" height="9" rx="1"/><path fill-rule="evenodd" d="M20,42 L28,34 H64 L72,42 V78 L64,86 H28 L20,78 Z M33,47 h26 v26 h-26 Z"/><rect x="159" y="41" width="9" height="6" rx="1"/><rect x="220" y="41" width="9" height="6" rx="1"/><rect x="175" y="25" width="6" height="9" rx="1"/><rect x="175" y="86" width="6" height="9" rx="1"/><rect x="159" y="57" width="9" height="6" rx="1"/><rect x="220" y="57" width="9" height="6" rx="1"/><rect x="191" y="25" width="6" height="9" rx="1"/><rect x="191" y="86" width="6" height="9" rx="1"/><rect x="159" y="73" width="9" height="6" rx="1"/><rect x="220" y="73" width="9" height="6" rx="1"/><rect x="207" y="25" width="6" height="9" rx="1"/><rect x="207" y="86" width="6" height="9" rx="1"/><path fill="none" stroke="currentColor" stroke-width="7" d="M171,43 L177,37 H211 L217,43 V77 L211,83 H177 L168,77 Z"/><rect x="181" y="47" width="26" height="26"/></g><g fill="var(--accent)"><rect x="98" y="50" width="44" height="8" rx="1"/><rect x="98" y="64" width="44" height="8" rx="1"/></g></svg>瑞通 Ruitong<span>ruitong.io</span></div>
   <div class="controls">
     <span id="langsel" role="group" aria-label="Language">
       <button data-set="en" aria-pressed="true">EN</button>
