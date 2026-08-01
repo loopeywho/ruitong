@@ -103,6 +103,20 @@
   .direct{font-size:13.5px;color:var(--mut);margin-top:14px}
   .direct a{font-family:var(--mono)}
 
+  .pricing{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:24px 0}
+  .plan{border:1px solid var(--line);border-radius:10px;padding:22px;background:var(--card);
+        display:flex;flex-direction:column}
+  .plan.featured{border-color:var(--accent)}
+  .plan h3{margin:0 0 4px;font-size:16px}
+  .plan .price{font-size:26px;font-weight:650;margin:4px 0 14px}
+  .plan .price span{font-size:13px;color:var(--mut);font-weight:400}
+  .plan ul{margin:0 0 20px;padding-left:18px;font-size:14px;color:var(--mut);flex:1}
+  .plan ul li{margin-bottom:6px}
+  .buy{display:inline-block;text-align:center;background:var(--accent);color:#fff;border-radius:6px;
+       padding:10px 16px;font-weight:600;font-size:14px;text-decoration:none;border:1px solid var(--accent)}
+  .buy:hover{opacity:.9}
+  .buy.outline{background:transparent;color:var(--fg);border-color:var(--line)}
+
   footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);
          font-size:14px;color:var(--mut)}
   a{color:var(--accent)}
@@ -421,9 +435,56 @@
   audit or procurement function, a spreadsheet from a debugging tool is not an answer.</p>
 
   <p>The reference table is public and free. If you need it run on <strong>your</strong> model and
-  <strong>your</strong> hardware, with a signed, provenance-bound report, get in touch.</p>
+  <strong>your</strong> hardware, with a signed, provenance-bound report, get in touch — or buy
+  directly below.</p>
 
-  <section class="contact">
+  <h2>Pricing</h2>
+
+  <p>Priced per engagement, not a subscription you have to justify before you have a number.
+  Each report is a real comparison — run on rented reference hardware plus your candidate
+  endpoint — never a simulated placeholder.</p>
+
+  <div class="pricing">
+    <div class="plan">
+      <h3>Single verification</h3>
+      <div class="price">$499<span> / model&nbsp;×&nbsp;pair</span></div>
+      <ul>
+        <li>One model, one accelerator pair (e.g. NVIDIA → Ascend)</li>
+        <li>Signed report: full provenance, raw JSON + summary table</li>
+        <li>Delivered in 3&ndash;5 business days</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/5kQ7sE31Ld3R6hd9iC1gs00" data-plan="single">Buy →</a>
+    </div>
+    <div class="plan featured">
+      <h3>Migration pack</h3>
+      <div class="price">$1,999<span> / 5 pairs</span></div>
+      <ul>
+        <li>Up to 5 model × accelerator pairs</li>
+        <li>Everything in Single, batched and prioritised</li>
+        <li>One consolidated report across all pairs</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/eVq28k8m55Bp20XfH01gs01" data-plan="pack">Buy →</a>
+    </div>
+    <div class="plan">
+      <h3>Enterprise</h3>
+      <div class="price">Custom</div>
+      <ul>
+        <li>Ongoing verification, CI-gated on every port</li>
+        <li>Self-serve API access when your volume needs it</li>
+        <li>Dedicated SLA and support channel</li>
+      </ul>
+      <a class="buy outline" href="#contact-en" data-plan="enterprise">Contact us →</a>
+    </div>
+  </div>
+
+  <p class="mut" style="font-size:13px">Payment via Stripe (card). Full refund if we cannot
+  produce a report — the D8 "could not run" case is on us, not you.</p>
+
+  <p class="mut" style="font-size:13px">Prefer crypto? Send USDT (Ethereum / ERC-20) to
+  <code>0xdA2b75956eaba2E50075E3258a496C89168d5E80</code> and email the transaction hash to
+  <a href="mailto:hello@ruitong.io">hello@ruitong.io</a> — we confirm and start the same day.</p>
+
+  <section class="contact" id="contact-en">
     <h2 style="margin-bottom:6px">Get in touch</h2>
     <p class="mut" style="font-size:14.5px">Tell us what you're migrating. We reply to every
     technical enquiry, including ones we can't help with.</p>
@@ -458,8 +519,7 @@
     </div>
     <button class="send" data-mail="en">Compose email →</button>
     <p class="direct">Opens your mail client with the details filled in — nothing is sent through
-    this page, and no third party sees your enquiry. Or write directly to
-    <a href="mailto:hello@ruitong.io">hello@ruitong.io</a>.</p>
+    this page, and no third party sees your enquiry.</p>
   </section>
 
 </main>
@@ -660,9 +720,52 @@
 
   <p>正在做加速卡迁移、并且需要向他人回答以下问题的团队：<em>模型行为是否发生了变化，变化了多少？</em>如果这个问题来自风控、审计或采购部门，一份调试工具导出的表格并不构成答案。</p>
 
-  <p>参考基准表公开且免费。如果需要在<strong>您自己的模型</strong>与<strong>您自己的硬件</strong>上运行，并出具带完整溯源的签署报告，欢迎联系。</p>
+  <p>参考基准表公开且免费。如果需要在<strong>您自己的模型</strong>与<strong>您自己的硬件</strong>上运行，并出具带完整溯源的签署报告，欢迎联系——也可直接在下方购买。</p>
 
-  <section class="contact">
+  <h2>价格</h2>
+
+  <p>按次收费，而非要求您在看到数字之前先证明订阅的价值。每一份报告都是真实比对——在租用的参考硬件与您的被测端点上实测——绝非模拟占位数据。</p>
+
+  <div class="pricing">
+    <div class="plan">
+      <h3>单次验证</h3>
+      <div class="price">$499<span> ／ 模型&nbsp;×&nbsp;加速卡组合</span></div>
+      <ul>
+        <li>一个模型、一组加速卡对比（例如 NVIDIA → 昇腾）</li>
+        <li>签署报告：完整溯源、原始 JSON + 汇总表</li>
+        <li>3–5 个工作日交付</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/5kQ7sE31Ld3R6hd9iC1gs00" data-plan="single">购买 →</a>
+    </div>
+    <div class="plan featured">
+      <h3>迁移套餐</h3>
+      <div class="price">$1,999<span> ／ 5 组</span></div>
+      <ul>
+        <li>最多 5 组模型 × 加速卡组合</li>
+        <li>包含单次验证的全部内容，批量并优先处理</li>
+        <li>跨全部组合的一份汇总报告</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/eVq28k8m55Bp20XfH01gs01" data-plan="pack">购买 →</a>
+    </div>
+    <div class="plan">
+      <h3>企业版</h3>
+      <div class="price">定制</div>
+      <ul>
+        <li>持续验证，接入 CI 门限</li>
+        <li>用量达到规模后可开通自助 API</li>
+        <li>专属 SLA 与支持渠道</li>
+      </ul>
+      <a class="buy outline" href="#contact-zh" data-plan="enterprise">联系我们 →</a>
+    </div>
+  </div>
+
+  <p class="mut" style="font-size:13px">通过 Stripe 支付（银行卡）。若我们无法出具报告，全额退款——D8 所定义的"无法判断"情形由我们承担，而非您。</p>
+
+  <p class="mut" style="font-size:13px">也可使用加密货币：将 USDT（以太坊 / ERC-20）发送至
+  <code>0xdA2b75956eaba2E50075E3258a496C89168d5E80</code>，并将交易哈希发送邮件至
+  <a href="mailto:hello@ruitong.io">hello@ruitong.io</a>——确认后当天开始处理。</p>
+
+  <section class="contact" id="contact-zh">
     <h2 style="margin-bottom:6px">联系我们</h2>
     <p class="mut" style="font-size:14.5px">请说明您正在迁移的内容。所有技术咨询我们都会回复，包括我们帮不上忙的情况。</p>
 
@@ -695,18 +798,17 @@
       <textarea id="z-msg" placeholder="例如：风控部门需要证据，说明迁移后模型行为保持一致"></textarea>
     </div>
     <button class="send" data-mail="zh">生成邮件 →</button>
-    <p class="direct">将打开您的邮件客户端并自动填好内容——本页面不发送任何数据，也没有第三方能看到您的咨询。也可直接写信至
-    <a href="mailto:hello@ruitong.io">hello@ruitong.io</a>。</p>
+    <p class="direct">将打开您的邮件客户端并自动填好内容——本页面不发送任何数据，也没有第三方能看到您的咨询。</p>
   </section>
 
 </main>
 
-<footer>
+<!-- ─────────────── РУССКИЙ ─────────────── -->
 <main data-lang="ru">
 
   <h1>Та же модель, другой ускоритель.<br>Насколько на самом деле меняются ответы?</h1>
 
-  <p class="lead">Этот показатель никто не публикует. Мы — будем.</p>
+  <p class="lede">Этот показатель никто не публикует. Мы — будем.</p>
 
   <p>Если вы переносите LLM с NVIDIA на Huawei Ascend, AMD, Intel Gaudi или отечественный
   ускоритель, выходные данные не будут идентичными. Сложение чисел с плавающей запятой не
@@ -846,7 +948,54 @@
   Эталонная таблица публична и бесплатна. Если нужно прогнать проверку на <strong>вашей</strong>
   модели и вашем оборудовании — напишите нам.</p>
 
-  <section class="contact">
+  <h2>Стоимость</h2>
+
+  <p>Оплата за конкретную проверку, не подписка, которую нужно оправдывать заранее. Каждый отчёт
+  — реальное сравнение на арендованном эталонном железе и вашей стороне, а не симуляция.</p>
+
+  <div class="pricing">
+    <div class="plan">
+      <h3>Разовая проверка</h3>
+      <div class="price">$499<span> / пара модель×ускоритель</span></div>
+      <ul>
+        <li>Одна модель, одна пара ускорителей</li>
+        <li>Подписанный отчёт: полная прослеживаемость, JSON + сводная таблица</li>
+        <li>Срок — 3–5 рабочих дней</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/5kQ7sE31Ld3R6hd9iC1gs00" data-plan="single">Купить →</a>
+    </div>
+    <div class="plan featured">
+      <h3>Пакет для миграции</h3>
+      <div class="price">$1,999<span> / 5 пар</span></div>
+      <ul>
+        <li>До 5 пар модель×ускоритель</li>
+        <li>Всё из «Разовой проверки», пакетно и с приоритетом</li>
+        <li>Один сводный отчёт по всем парам</li>
+      </ul>
+      <a class="buy" href="https://buy.stripe.com/eVq28k8m55Bp20XfH01gs01" data-plan="pack">Купить →</a>
+    </div>
+    <div class="plan">
+      <h3>Корпоративный</h3>
+      <div class="price">По запросу</div>
+      <ul>
+        <li>Постоянная проверка, встроенная в CI</li>
+        <li>Самостоятельный доступ к API при достаточном объёме</li>
+        <li>Выделенный SLA и канал поддержки</li>
+      </ul>
+      <a class="buy outline" href="#contact-ru" data-plan="enterprise">Связаться →</a>
+    </div>
+  </div>
+
+  <p class="mut" style="font-size:13px">Оплата через Stripe (банковская карта). Если карта,
+  выпущенная в России, не проходит из-за международных ограничений — используйте оплату
+  криптовалютой ниже, либо напишите нам напрямую. Полный возврат, если отчёт не может быть
+  выполнен.</p>
+
+  <p class="mut" style="font-size:13px">Оплата криптовалютой: отправьте USDT (Ethereum / ERC-20)
+  на адрес <code>0xdA2b75956eaba2E50075E3258a496C89168d5E80</code> и пришлите хеш транзакции на
+  <a href="mailto:hello@ruitong.io">hello@ruitong.io</a> — подтвердим и начнём в тот же день.</p>
+
+  <section class="contact" id="contact-ru">
     <h2 style="margin-bottom:6px">Связаться</h2>
     <p class="mut" style="margin-top:0">Письмо уходит из вашего почтового клиента прямо к нам.
     Ни формы-посредника, ни стороннего сервиса, ни аналитики — заявку не видит никто, кроме нас.</p>
@@ -877,6 +1026,7 @@
 
 </main>
 
+<footer>
   <p><span data-lang="en" class="on">瑞通 Ruitong — vendor-neutral accelerator equivalence.
   Method and tooling open; reference data published as measured.</span><span data-lang="zh">瑞通
   Ruitong — 厂商中立的加速卡等价性验证。方法与工具开放，参考数据实测后发布。</span><span data-lang="ru">瑞通 Ruitong — независимая от производителя проверка эквивалентности ускорителей. Метод и инструменты открыты; эталонные данные публикуются как измерены.</span></p>
