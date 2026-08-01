@@ -279,6 +279,35 @@
   hardware, that metric&rsquo;s noise and its faults <em>overlap</em>: no threshold separates them.
   We match tokens by identity and compare probabilities instead.</p>
 
+  <h2>The second real cross-hardware measurement</h2>
+
+  <p>NVIDIA A40 against NVIDIA H100 (Hopper) — a second same-vendor pair, run after the gate
+  above was recalibrated to <code>0.4402</code>, to check whether that threshold holds on silicon
+  we had not yet touched.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Measure</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Identical output text</td><td class="num">12 / 16 prompts</td></tr>
+      <tr><td>Different output text</td><td class="num">4 / 16 prompts (25%)</td></tr>
+      <tr><td>Top-1 token agreement (before divergence)</td><td class="num">1.000</td></tr>
+      <tr><td>Worst token-matched Δprob (before divergence)</td><td class="num">0.0868</td></tr>
+      <tr><td>Probability-mass delta</td><td class="num">0.0000366</td></tr>
+      <tr><td><strong>Gate verdict</strong></td><td class="pass"><strong>PASS — equivalent within calibrated tolerance</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>The compound gate&rsquo;s first test since recalibration, and it held.</strong> The
+  divergent-text rate (25%) lands close to the A40-vs-Ada figure above (26%) — different text
+  still shows up between two correct NVIDIA GPUs — but the worst token-matched Δprob (0.087) sits
+  well under Ada&rsquo;s (0.195), comfortably inside the 0.4402 ceiling.</p>
+
+  <p class="mut">Caveat: this run used the original 16-prompt corpus, not the widened 61-prompt
+  set — treat 25% as a rougher estimate than the Ada figure&rsquo;s already-wide confidence
+  interval, not a tighter one.</p>
+
   <h2>The accuracy delta table</h2>
 
   <div class="callout pending">
@@ -294,6 +323,7 @@
     <tbody>
       <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>A40 bf16, warm</td><td>Is the reference itself reproducible?</td><td class="pass">done — bit-exact, 16/16</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16, cold</td><td>A40 bf16, warm</td><td>Does cache state move it?</td><td class="pass">done — 0.087, see above</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16, warm</td><td>H100 bf16, warm</td><td>Second same-vendor pair — does the gate hold on new silicon?</td><td class="pass">done — PASS, see above</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>What is the cross-precision noise floor?</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
@@ -486,6 +516,28 @@
 
   <p><strong>按排名比对 logprob，比的是不同的 token。</strong>在 top-k 的尾部，大量 token 概率非常接近，极微小的扰动就会让它们互换次序——我们实测到同一位置的 rank 3，一侧是 <code>&#39;高&#39;</code>，另一侧是 <code>&#39; like&#39;</code>。而在对数空间中，logprob −26 处（概率约 1e-12，永远不会被采样）的 0.5 偏移，与最大概率 token 上的 0.5 偏移得分相同，后者却会改变输出。在真实硬件上，该指标的噪声与故障区间<em>相互重叠</em>：不存在任何能区分二者的门限。我们改为按 token 身份对齐，并在概率空间比对。</p>
 
+  <h2>第二次真实跨硬件实测</h2>
+
+  <p>NVIDIA A40 对比 NVIDIA H100（Hopper）——第二组同厂商配对，在上文门限重新校准为 <code>0.4402</code> 之后进行，用以检验该门限在此前从未测过的芯片上是否依然成立。</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>指标</th><th>结果</th></tr></thead>
+    <tbody>
+      <tr><td>输出文本完全一致</td><td class="num">12 / 16 条</td></tr>
+      <tr><td>输出文本不同</td><td class="num">4 / 16 条（25%）</td></tr>
+      <tr><td>Top-1 token 一致率（分叉之前）</td><td class="num">1.000</td></tr>
+      <tr><td>最大 token 对齐 Δ概率（分叉之前）</td><td class="num">0.0868</td></tr>
+      <tr><td>概率质量偏差</td><td class="num">0.0000366</td></tr>
+      <tr><td><strong>门限判定</strong></td><td class="pass"><strong>通过——在校准容差内等价</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>这是复合门限重新校准后的首次实测，结果通过。</strong>文本分叉率（25%）与上文 A40 对 Ada 的结果（26%）相近——两块正确的 NVIDIA GPU 之间依然会出现不同文本——但本次最大 token 对齐 Δ概率（0.087）明显低于 Ada 的 0.195，稳稳落在 0.4402 的上限之内。</p>
+
+  <p class="mut">局限：本次实测使用的是最初的 16 条提示词语料，而非扩充后的 61 条——25% 应被视为比 Ada 那组本已较宽的置信区间更粗略的估计，而非更精确。</p>
+
   <h2>精度差异表</h2>
 
   <div class="callout pending">
@@ -498,6 +550,7 @@
     <tbody>
       <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>A40 bf16，已预热</td><td>参考端自身是否可复现？</td><td class="pass">已完成——逐比特一致，16/16</td></tr>
       <tr><td>Qwen3-8B</td><td>A40 bf16，冷启动</td><td>A40 bf16，已预热</td><td>缓存状态是否影响结果？</td><td class="pass">已完成——0.087，见上文</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16，已预热</td><td>H100 bf16，已预热</td><td>第二组同厂商配对——门限在新芯片上是否依然成立？</td><td class="pass">已完成——通过，见上文</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 fp16</td><td>A100 bf16</td><td>跨精度噪声基线是多少？</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>跨厂商、同精度</td><td class="mut">排期中</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>仅 batch 变化会影响吗？</td><td class="mut">排期中</td></tr>
