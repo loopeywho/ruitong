@@ -374,6 +374,12 @@
   this generalizes — that is exactly why this project exists, to keep measuring rather than
   assume. Ascend (CANN) is still queued.</p>
 
+  <p>If you have access to Huawei Ascend 910B hardware running vLLM (or an equivalent
+  OpenAI-compatible server), we would like to hear from you. Running our published capture script
+  against your own local endpoint and sending back the resulting JSON is enough — no access to
+  your infrastructure needed, no credentials shared, nothing proprietary in what's returned.
+  Contributors are credited by name. <a href="#contact-en">Get in touch</a>.</p>
+
   <h2>The precision floor</h2>
 
   <p>NVIDIA A100 running the same <code>Qwen3-8B</code> twice — once served in fp16, once in
@@ -704,6 +710,8 @@
 
   <p class="mut">仅为单一数据点：单一模型、单一提示词集、单一 MI300X 实例。我们不会据此断言可推广——这正是本项目持续实测、而非想当然的原因所在。昇腾（CANN）仍在排期中。</p>
 
+  <p>如果您能访问华为昇腾 910B 硬件并运行 vLLM（或兼容 OpenAI 接口的推理服务），我们非常希望听到您的消息。只需在您自己的本地端点上运行我们已公开的采集脚本，并将生成的 JSON 结果发回给我们即可——无需开放您的基础设施访问权限，不涉及任何凭证共享，返回内容中也不含任何专有信息。贡献者将署名致谢。<a href="#contact-zh">联系我们</a>。</p>
+
   <h2>精度基线</h2>
 
   <p>同一块 NVIDIA A100，同一个 <code>Qwen3-8B</code>，跑两次——一次以 fp16 提供服务，一次以 bf16。同一块 GPU、同一份权重，硬件完全没有变化，唯一变量是服务精度。这回答了与上面厂商配对不同的问题：在任何芯片变化发生之前，你看到的分叉里有多少只是精度造成的？</p>
@@ -1004,6 +1012,12 @@
     </tbody>
   </table>
   </div>
+
+  <p>Если у вас есть доступ к оборудованию Huawei Ascend 910B с работающим vLLM (или аналогичным
+  OpenAI-совместимым сервером), напишите нам. Достаточно запустить наш опубликованный скрипт сбора
+  данных на вашем собственном локальном эндпоинте и прислать нам получившийся JSON — доступ к
+  вашей инфраструктуре не требуется, никакие учётные данные передавать не нужно, в результате нет
+  ничего проприетарного. Авторов вклада указываем по имени. <a href="#contact-ru">Связаться</a>.</p>
 
   <h2>Метод</h2>
 
