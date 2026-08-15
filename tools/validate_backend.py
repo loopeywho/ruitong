@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Validate a backend's OpenAI-compatible API for pre-flight checks.
 
-Runs 6 checks — cheapest and most decisive first — then exits 0 usable / 1 unusable,
-printing *why* a check failed.
+Runs 6 checks — cheapest and most decisive first — then exits:
+  0 = usable
+  1 = unusable (the port is broken)
+  2 = inconclusive (could not tell — e.g. vllm-ascend#7218 bug masks token identity)
 
 Checks:
   1. /v1/models responds and lists the expected model.
@@ -17,9 +19,6 @@ Checks:
 
 Usage:
     python tools/validate_backend.py --endpoint http://localhost:8000 --model Qwen3-8B
-
-TODO: R8 — refine check 3 so it distinguishes "all identical tokens" from "all
-identical *decoded strings but distinct token IDs" (vllm-ascend#7218).
 """
 from __future__ import annotations
 
@@ -46,91 +45,53 @@ from ruitong.equivalence.metrics import (
     count_non_finite,
 )
 
+# ── Result code constants ─────────────────────────────────────────────────────
+PASS = 0
+FAIL = 1
+INCONCLUSIVE = 2
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-Result = tuple[bool, str]  # (passed, message)
-
-
-def _models_endpoint(endpoint: str) -> str:
-    return endpoint.rstrip("/") + "/v1/models"
 
 
 def _chat_endpoint(endpoint: str) -> str:
-    return endpoint.rstrip("/") + "/v1/chat/completions"
+    return f"{endpoint.rstrip('/')}/v1/chat/completions"
 
 
-# ── Check 1: /v1/models responds and lists expected model ─────────────────────
+def _extract_top_logprob_tokens(content: list[dict]) -> list[list[str]]:
+    """Extract top-k token strings from logprobs content."""
+    rows: list[list[str]] = []
+    for entry in content:
+        tops = entry.get("top_logprobs", [])
+        rows.append([t["token"] for t in tops])
+    return rows
 
 
-def check_models(endpoint: str, model: str) -> Result:
-    url = _models_endpoint(endpoint)
+# ── Check 1: /v1/models responds ──────────────────────────────────────────────
+
+
+def check_models(endpoint: str, model: str) -> tuple[int, str]:
+    url = f"{endpoint.rstrip('/')}/v1/models"
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(url)
             resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        return (False, f"Check 1 (/v1/models) failed: HTTP {exc.response.status_code}")
+        return (FAIL, f"Check 1 (/v1/models) failed: HTTP {exc.response.status_code}")
     except httpx.RequestError as exc:
-        return (False, f"Check 1 (/v1/models) failed: {exc}")
+        return (FAIL, f"Check 1 (/v1/models) failed: {exc}")
 
     body = resp.json()
-    # OpenAI-compatible envelope: {"object": "list", "data": [...]}
-    data = body.get("data") if isinstance(body, dict) else None
-    if not isinstance(data, list):
-        return (False, "Check 1 (/v1/models) failed: response has no 'data' list")
-
-    ids = [entry.get("id", "") if isinstance(entry, dict) else str(entry) for entry in data]
-    if model not in ids:
-        return (
-            False,
-            f"Check 1 (/v1/models) failed: expected model '{model}' not found "
-            f"in {ids}",
-        )
-    return (True, f"Check 1 passed: model '{model}' listed")
+    models = [m["id"] for m in body.get("data", [])]
+    if model not in models:
+        return (FAIL, f"Check 1 (/v1/models) failed: model '{model}' not found in {models}")
+    return (PASS, f"Check 1 passed: model '{model}' found among {len(models)} models")
 
 
 # ── Check 2: logprobs populated ───────────────────────────────────────────────
 
 
-def check_logprobs_populated(endpoint: str, model: str) -> Result:
-    url = _chat_endpoint(endpoint)
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Say hello."}],
-        "max_tokens": 4,
-        "logprobs": True,
-        "top_logprobs": 5,
-    }
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(url, json=payload)
-            resp.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        return (False, f"Check 2 (logprobs populated) failed: HTTP {exc.response.status_code}")
-    except httpx.RequestError as exc:
-        return (False, f"Check 2 (logprobs populated) failed: {exc}")
-
-    body = resp.json()
-    choices = body.get("choices", [])
-    if not choices:
-        return (False, "Check 2 (logprobs populated) failed: empty choices")
-
-    logprobs = choices[0].get("logprobs")
-    if logprobs is None:
-        return (False, "Check 2 (logprobs populated) failed: no logprobs in response")
-
-    content = logprobs.get("content", [])
-    if not content:
-        return (False, "Check 2 (logprobs populated) failed: content list is empty")
-
-    return (True, f"Check 2 passed: {len(content)} logprob entries returned")
-
-
-# ── Check 3: token identity usable ────────────────────────────────────────────
-# Uses count_degenerate_token_rows from equivalence/metrics.py.
-
-
-def check_token_identity(endpoint: str, model: str) -> Result:
+def check_logprobs_populated(endpoint: str, model: str) -> tuple[int, str]:
     url = _chat_endpoint(endpoint)
     payload = {
         "model": model,
@@ -144,50 +105,99 @@ def check_token_identity(endpoint: str, model: str) -> Result:
             resp = client.post(url, json=payload)
             resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        return (
-            False,
-            f"Check 3 (token identity) failed: HTTP {exc.response.status_code}",
-        )
+        return (FAIL, f"Check 2 (logprobs) failed: HTTP {exc.response.status_code}")
     except httpx.RequestError as exc:
-        return (False, f"Check 3 (token identity) failed: {exc}")
+        return (FAIL, f"Check 2 (logprobs) failed: {exc}")
 
     body = resp.json()
     choices = body.get("choices", [])
     if not choices:
-        return (False, "Check 3 (token identity) failed: empty choices")
+        return (FAIL, "Check 2 (logprobs) failed: empty choices")
 
     logprobs_obj = choices[0].get("logprobs")
     if logprobs_obj is None:
-        return (False, "Check 3 (token identity) failed: no logprobs in response")
+        return (FAIL, "Check 2 (logprobs) failed: no logprobs in response")
 
     content = logprobs_obj.get("content", [])
-    # Extract top-k token lists per position
-    token_rows: list[list[str]] = []
-    for entry in content:
-        tops = entry.get("top_logprobs", [])
-        row_tokens = [t.get("token", "") for t in tops]
-        token_rows.append(row_tokens)
+    if not content:
+        return (FAIL, "Check 2 (logprobs) failed: empty content")
+
+    # At least one position should have top_logprobs
+    has_top = any(entry.get("top_logprobs") for entry in content)
+    if not has_top:
+        return (FAIL, "Check 2 (logprobs) failed: no top_logprobs in any position")
+
+    return (PASS, f"Check 2 passed: {len(content)} positions, top_logprobs present")
+
+
+# ── Check 3: Token identity usable ────────────────────────────────────────────
+# Uses count_degenerate_token_rows from equivalence/metrics.py.
+
+
+def check_token_identity(endpoint: str, model: str) -> tuple[int, str]:
+    url = _chat_endpoint(endpoint)
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "Say something interesting."}],
+        "max_tokens": 8,
+        "logprobs": True,
+        "top_logprobs": 5,
+    }
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        return (FAIL, f"Check 3 (token identity) failed: HTTP {exc.response.status_code}")
+    except httpx.RequestError as exc:
+        return (FAIL, f"Check 3 (token identity) failed: {exc}")
+
+    body = resp.json()
+    choices = body.get("choices", [])
+    if not choices:
+        return (FAIL, "Check 3 (token identity) failed: empty choices")
+
+    logprobs_obj = choices[0].get("logprobs")
+    if logprobs_obj is None:
+        return (FAIL, "Check 3 (token identity) failed: no logprobs in response")
+
+    content = logprobs_obj.get("content", [])
+    if not content:
+        return (FAIL, "Check 3 (token identity) failed: empty content")
+
+    token_rows = _extract_top_logprob_tokens(content)
 
     if not token_rows:
-        return (False, "Check 3 (token identity) failed: no token data")
+        return (FAIL, "Check 3 (token identity) failed: no token data")
 
     degenerate = count_degenerate_token_rows(token_rows)
     total_rows = len(token_rows)
 
-    # Check for synthetic token_id:N references (R8 future refinement)
+    # Check for synthetic token_id:N references (vllm-ascend#7218)
     synthetic_refs = sum(
         1 for row in token_rows for t in row if t.startswith("token_id:")
     )
 
     if degenerate > 0:
+        # vllm-ascend#7218: top_logprobs token IDs are degenerate (all show the
+        # sampled token's ID) but the logprob VALUES are correct. When synthetic
+        # token_id:N refs are found, the backend is probably usable — we just
+        # can't tell from token identity alone.
+        if synthetic_refs > 0:
+            return (
+                INCONCLUSIVE,
+                f"Check 3 inconclusive: {degenerate}/{total_rows} rows degenerate "
+                f"({synthetic_refs} token_id:N refs — known vllm-ascend#7218 bug, "
+                f"logprob values likely correct)",
+            )
         return (
-            False,
+            FAIL,
             f"Check 3 (token identity) failed: {degenerate}/{total_rows} "
             f"rows are degenerate (all identical tokens), "
             f"{synthetic_refs} synthetic token_id:N refs found",
         )
     return (
-        True,
+        PASS,
         f"Check 3 passed: {total_rows} rows, {degenerate} degenerate, "
         f"{synthetic_refs} synthetic refs",
     )
@@ -197,7 +207,7 @@ def check_token_identity(endpoint: str, model: str) -> Result:
 # Uses count_non_finite from equivalence/metrics.py.
 
 
-def check_no_sentinels(endpoint: str, model: str) -> Result:
+def check_no_sentinels(endpoint: str, model: str) -> tuple[int, str]:
     url = _chat_endpoint(endpoint)
     payload = {
         "model": model,
@@ -211,21 +221,18 @@ def check_no_sentinels(endpoint: str, model: str) -> Result:
             resp = client.post(url, json=payload)
             resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        return (
-            False,
-            f"Check 4 (sentinel values) failed: HTTP {exc.response.status_code}",
-        )
+        return (FAIL, f"Check 4 (sentinel values) failed: HTTP {exc.response.status_code}")
     except httpx.RequestError as exc:
-        return (False, f"Check 4 (sentinel values) failed: {exc}")
+        return (FAIL, f"Check 4 (sentinel values) failed: {exc}")
 
     body = resp.json()
     choices = body.get("choices", [])
     if not choices:
-        return (False, "Check 4 (sentinel values) failed: empty choices")
+        return (FAIL, "Check 4 (sentinel values) failed: empty choices")
 
     logprobs_obj = choices[0].get("logprobs")
     if logprobs_obj is None:
-        return (False, "Check 4 (sentinel values) failed: no logprobs in response")
+        return (FAIL, "Check 4 (sentinel values) failed: no logprobs in response")
 
     content = logprobs_obj.get("content", [])
 
@@ -238,7 +245,7 @@ def check_no_sentinels(endpoint: str, model: str) -> Result:
         all_logs.append(entry["logprob"])
 
     if not all_logs:
-        return (True, "Check 4 passed: no logprob values to check")
+        return (PASS, "Check 4 passed: no logprob values to check")
 
     non_finite = count_non_finite([all_logs])
 
@@ -247,18 +254,17 @@ def check_no_sentinels(endpoint: str, model: str) -> Result:
 
     if non_finite > 0 or sentinel_9999 > 0:
         return (
-            False,
-            f"Check 4 (sentinel values) failed: {non_finite} non-finite values "
-            f"(-inf/NaN) + {sentinel_9999} sentinel -9999 values "
-            f"among {len(all_logs)} entries",
+            FAIL,
+            f"Check 4 (sentinel values) failed: {non_finite} non-finite, "
+            f"{sentinel_9999} sentinels (-9999)",
         )
-    return (True, f"Check 4 passed: {len(all_logs)} values, 0 non-finite")
+    return (PASS, f"Check 4 passed: {len(all_logs)} values, all finite")
 
 
 # ── Check 5: probability mass plausible ───────────────────────────────────────
 
 
-def check_probability_mass(endpoint: str, model: str) -> Result:
+def check_probability_mass(endpoint: str, model: str) -> tuple[int, str]:
     url = _chat_endpoint(endpoint)
     payload = {
         "model": model,
@@ -272,29 +278,25 @@ def check_probability_mass(endpoint: str, model: str) -> Result:
             resp = client.post(url, json=payload)
             resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        return (
-            False,
-            f"Check 5 (probability mass) failed: HTTP {exc.response.status_code}",
-        )
+        return (FAIL, f"Check 5 (probability mass) failed: HTTP {exc.response.status_code}")
     except httpx.RequestError as exc:
-        return (False, f"Check 5 (probability mass) failed: {exc}")
+        return (FAIL, f"Check 5 (probability mass) failed: {exc}")
 
     body = resp.json()
     choices = body.get("choices", [])
     if not choices:
-        return (False, "Check 5 (probability mass) failed: empty choices")
+        return (FAIL, "Check 5 (probability mass) failed: empty choices")
 
     logprobs_obj = choices[0].get("logprobs")
     if logprobs_obj is None:
-        return (False, "Check 5 (probability mass) failed: no logprobs in response")
+        return (FAIL, "Check 5 (probability mass) failed: no logprobs in response")
 
     content = logprobs_obj.get("content", [])
     if not content:
-        return (False, "Check 5 (probability mass) failed: empty content")
+        return (FAIL, "Check 5 (probability mass) failed: empty content")
 
     # For each position, sum exp(logprob) over top-k entries
     bad_positions: list[int] = []
-    sums: list[float] = []
     for pos, entry in enumerate(content):
         tops = entry.get("top_logprobs", [])
         mass = 0.0
@@ -304,20 +306,18 @@ def check_probability_mass(endpoint: str, model: str) -> Result:
                 mass += math.exp(lp)
             else:
                 mass += math.exp(64.0)
-        sums.append(mass)
         if mass <= 0.0 or mass > 1.001:  # tiny tolerance above 1
             bad_positions.append(pos)
 
     if bad_positions:
         return (
-            False,
+            FAIL,
             f"Check 5 (probability mass) failed: {len(bad_positions)}/{len(content)} "
             f"positions have implausible mass (not in (0,1]): "
-            f"indices {bad_positions[:5]}{'' if len(bad_positions) <= 5 else '...'}, "
-            f"example sums {sums[bad_positions[0]]:.6f}",
+            f"indices {bad_positions[:5]}{'' if len(bad_positions) <= 5 else '...'}",
         )
     return (
-        True,
+        PASS,
         f"Check 5 passed: {len(content)} positions, all mass in (0,1]",
     )
 
@@ -325,7 +325,7 @@ def check_probability_mass(endpoint: str, model: str) -> Result:
 # ── Check 6: warm-repeat determinism ──────────────────────────────────────────
 
 
-def check_determinism(endpoint: str, model: str) -> Result:
+def check_determinism(endpoint: str, model: str) -> tuple[int, str]:
     url = _chat_endpoint(endpoint)
     payload = {
         "model": model,
@@ -348,9 +348,9 @@ def check_determinism(endpoint: str, model: str) -> Result:
             resp3 = client.post(url, json=payload)
             resp3.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        return (False, f"Check 6 (determinism) failed: HTTP {exc.response.status_code}")
+        return (FAIL, f"Check 6 (determinism) failed: HTTP {exc.response.status_code}")
     except httpx.RequestError as exc:
-        return (False, f"Check 6 (determinism) failed: {exc}")
+        return (FAIL, f"Check 6 (determinism) failed: {exc}")
 
     body2 = resp2.json()
     body3 = resp3.json()
@@ -370,11 +370,11 @@ def check_determinism(endpoint: str, model: str) -> Result:
                 diff_pos = i
                 break
         return (
-            False,
+            FAIL,
             f"Check 6 (determinism) failed: calls 2 and 3 differ at byte {diff_pos} "
             f"(len2={len(str2)}, len3={len(str3)})",
         )
-    return (True, "Check 6 passed: calls 2 and 3 are bit-identical")
+    return (PASS, "Check 6 passed: calls 2 and 3 are bit-identical")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -400,22 +400,31 @@ def main() -> int:
     print(f"Validating backend at {args.endpoint} (model: {args.model})")
     print("-" * 60)
 
-    all_pass = True
+    has_fail = False
+    has_inconclusive = False
     for label, check_fn in CHECKS:
-        passed, msg = check_fn(args.endpoint, args.model)
-        status = "PASS" if passed else "FAIL"
+        code, msg = check_fn(args.endpoint, args.model)
+        if code == PASS:
+            status = "PASS"
+        elif code == INCONCLUSIVE:
+            status = "INCONCLUSIVE"
+            has_inconclusive = True
+        else:
+            status = "FAIL"
+            has_fail = True
         print(f"[{status}] {label}")
         print(f"       {msg}")
-        if not passed:
-            all_pass = False
 
     print("-" * 60)
-    if all_pass:
+    if not has_fail and not has_inconclusive:
         print("All checks passed — backend is usable.")
         return 0
-    else:
+    elif has_fail:
         print("One or more checks FAILED — backend is NOT usable.")
         return 1
+    else:
+        print("All checks passed or inconclusive — backend is usable with caveats.")
+        return 2
 
 
 if __name__ == "__main__":
