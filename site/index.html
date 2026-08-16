@@ -433,7 +433,7 @@
       <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Cross-vendor, same precision</td><td class="mut">queued</td></tr>
       <tr><td>Qwen3-8B</td><td>A100 bs=1</td><td>A100 bs=8</td><td>Does batch size alone move it?</td><td class="mut">queued</td></tr>
       <tr><td>Llama-3.1-8B</td><td>A100 bf16</td><td>MI300X bf16</td><td>Model-dependence</td><td class="mut">queued</td></tr>
-      <tr><td>Qwen3-8B</td><td>A100 bf16</td><td>Ascend 910B</td><td>CUDA → CANN</td><td class="mut">v3</td></tr>
+      <tr><td>Qwen3-8B</td><td>A40 bf16</td><td>Ascend 910B (DashScope)</td><td>CUDA → CANN — <strong>top-1 agreement: 15%</strong></td><td class="fail">done — DIVERGENT</td></tr>
     </tbody>
   </table>
   </div>
@@ -441,6 +441,11 @@
   <p><small>The batch-size row matters as much as the vendor row. Published research shows BF16
   accuracy varying by up to 9% from GPU count and batch size alone. Without it, a cross-vendor
   number looks damning when it may be ordinary.</small></p>
+
+  <h2>Research Notes</h2>
+  <ul>
+    <li><a href="/posts/ascend-vs-cuda-equivalence">Ascend vs CUDA: Qwen3-8B Token-Level Equivalence</a> — Aug 16, 2026. 15% top-1 agreement: Ascend and CUDA are not equivalent at the token level.</li>
+  </ul>
 
   <h2>Method</h2>
 
